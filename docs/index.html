@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WireView Xeneon Edge Widgets</title>
+<style>
+  :root { color-scheme: dark; --bg: #0e0e0d; --ink: #f2f2ee; --ink-2: #b9b8b0; --ink-3: #7a7973; --accent: #f08e33; --card: #191918; --good: #0ca30c; --crit: #d03b3b; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: "Segoe UI", system-ui, sans-serif; line-height: 1.5; padding: 32px 16px 64px; }
+  main { max-width: 880px; margin: 0 auto; }
+  h1 { font-size: 1.8rem; margin: 0 0 4px; }
+  h2 { font-size: 1.15rem; margin: 32px 0 8px; }
+  p { margin: 8px 0; color: var(--ink-2); }
+  a { color: var(--accent); }
+  code, pre { font-family: Consolas, "Cascadia Mono", monospace; font-size: 0.92em; }
+  pre { background: var(--card); padding: 12px; border-radius: 8px; overflow-x: auto; }
+  .status { display: inline-flex; align-items: center; gap: 8px; background: var(--card); padding: 8px 12px; border-radius: 999px; font-size: 0.95rem; }
+  .status .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--ink-3); }
+  .status.ok .dot { background: var(--good); } .status.bad .dot { background: var(--crit); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
+  .card { background: var(--card); border-radius: 12px; padding: 16px; }
+  .card h3 { margin: 0 0 6px; font-size: 1.05rem; }
+  .card .url { display: block; word-break: break-all; color: var(--ink-2); margin: 8px 0; }
+  .card iframe { width: 100%; aspect-ratio: 840 / 344; border: 0; border-radius: 8px; background: #000; }
+  ol li { margin: 6px 0; color: var(--ink-2); }
+  table { border-collapse: collapse; width: 100%; font-size: 0.95rem; }
+  td, th { text-align: left; padding: 6px 8px; border-bottom: 1px solid #2a2a28; vertical-align: top; }
+  th { color: var(--ink-3); font-weight: 500; }
+</style>
+</head>
+<body>
+<main>
+  <h1>WireView Pro II widgets for the Corsair Xeneon Edge</h1>
+  <p>Live per-wire current, total current and total power from a Thermal Grizzly WireView Pro II, shown on the Xeneon Edge through iCUE's iFrame widget.</p>
+  <p><span class="status" id="bridge"><span class="dot"></span><span id="bridge-text">Checking local bridge…</span></span></p>
+
+  <h2>Widgets</h2>
+  <div class="grid" id="cards"></div>
+
+  <h2>Setup</h2>
+  <ol>
+    <li>Install <a href="https://www.hwinfo.com/download/">HWiNFO64</a> 8.41 or newer. It reads the WireView Pro II directly, so close the Thermal Grizzly WireView app (the two cannot share the USB port).</li>
+    <li>In HWiNFO: Sensors-only mode, and Settings → Main Settings → <b>Shared Memory Support</b> on. The free version stops the feed after 12 hours per session; HWiNFO Pro removes that cap.</li>
+    <li>Run the bridge from this repository: <code>python bridge/wireview_bridge.py</code> (Python 3.10+, no packages). It serves JSON at <code>http://localhost:8765/api/wireview</code> and also serves these widgets locally. <code>bridge/install-startup.ps1</code> makes it start at login.</li>
+    <li>In iCUE, open the Xeneon Edge, add an <b>iFrame</b> widget, and paste one of the widget URLs above. Add <code>?wire_limit=10.5&amp;total_limit=55&amp;cable_w=600</code> to match the limits set in the WireView device.</li>
+  </ol>
+
+  <h2>URL options</h2>
+  <table>
+    <tr><th>Option</th><th>Default</th><th>Meaning</th></tr>
+    <tr><td><code>host</code></td><td><code>http://localhost:8765</code></td><td>Bridge origin</td></tr>
+    <tr><td><code>wire_limit</code></td><td><code>10.5</code></td><td>Amps per wire shown as 100 % (per-wire widget)</td></tr>
+    <tr><td><code>total_limit</code></td><td><code>55</code></td><td>Amps total shown as 100 % (total current widget)</td></tr>
+    <tr><td><code>cable_w</code></td><td><code>600</code></td><td>Cable rating in W (total power widget)</td></tr>
+    <tr><td><code>decimals</code></td><td><code>2</code></td><td>Decimals on headline numbers</td></tr>
+    <tr><td><code>interval</code></td><td><code>1000</code></td><td>Poll interval in ms</td></tr>
+    <tr><td><code>accent</code>, <code>bg</code>, <code>fg</code></td><td>orange / black / white</td><td>Hex colours without <code>#</code></td></tr>
+    <tr><td><code>label=0</code></td><td></td><td>Hide the caption line</td></tr>
+  </table>
+  <p>Warning colour starts at 80 % of a limit, critical at 100 %; the device's own fault flags (over-current, over-power, over-temperature, imbalance) always show as critical with their name.</p>
+</main>
+<script>
+(function () {
+  const base = location.href.replace(/[^/]*$/, '');
+  const widgets = [
+    ['per-wire', 'Per-wire current', 'Six bars, one per 12V wire, against the per-wire limit.'],
+    ['total-current', 'Total current', 'Headline amps with a gauge against the total limit.'],
+    ['total-power', 'Total power', 'Headline watts with a gauge against the cable rating.'],
+  ];
+  const cards = document.getElementById('cards');
+  widgets.forEach(([slug, title, desc]) => {
+    const url = base + slug + '/';
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.innerHTML = '<h3>' + title + '</h3><p>' + desc + '</p><a class="url" href="' + url + '">' + url + '</a>' +
+      '<iframe src="' + slug + '/" title="' + title + ' preview" loading="lazy"></iframe>';
+    cards.appendChild(card);
+  });
+  const st = document.getElementById('bridge'), txt = document.getElementById('bridge-text');
+  fetch('http://localhost:8765/api/wireview', { cache: 'no-store' }).then(r => r.json()).then(d => {
+    if (d.ok) { st.className = 'status ok'; txt.textContent = 'Bridge online · ' + d.total_current.toFixed(2) + ' A · ' + d.total_power.toFixed(0) + ' W'; }
+    else { st.className = 'status bad'; txt.textContent = 'Bridge online but no data: ' + (d.error || 'unknown'); }
+  }).catch(() => { st.className = 'status bad'; txt.textContent = 'Local bridge not reachable at localhost:8765'; });
+})();
+</script>
+</body>
+</html>

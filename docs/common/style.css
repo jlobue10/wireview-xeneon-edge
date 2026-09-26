@@ -1,0 +1,69 @@
+/* Shared look for the WireView Pro II Xeneon Edge widgets.
+ * Sized with vmin tokens so the same page fits every Edge slot
+ * (840x344 up to 2536x696, and the vertical 696x416 .. 696x2536). */
+:root {
+  color-scheme: dark;
+  --surface: #000000;
+  --ink: #ffffff;
+  --ink-2: #b9b8b0;
+  --ink-3: #7a7973;
+  --accent: #f08e33;      /* Thermal Grizzly orange */
+  --track: #262624;
+  --good: #0ca30c;
+  --warn: #fab219;
+  --crit: #d03b3b;
+  --u: 1vmin;
+  --fs-hero: calc(var(--u) * 30);
+  --fs-unit: calc(var(--u) * 11);
+  --fs-sub: calc(var(--u) * 6);
+  --fs-cap: calc(var(--u) * 4.2);
+  --pad: calc(var(--u) * 6);
+  --radius: calc(var(--u) * 1.5);
+  font-family: "Segoe UI", "Open Sans", system-ui, -apple-system, sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--surface); color: var(--ink); overflow: hidden; }
+body { display: flex; flex-direction: column; padding: var(--pad); gap: calc(var(--u) * 2); font-variant-numeric: tabular-nums; }
+
+.caption {
+  font-size: var(--fs-cap); letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3);
+  display: flex; justify-content: space-between; align-items: baseline; gap: 1em; white-space: nowrap;
+}
+.caption .right { color: var(--ink-2); letter-spacing: 0; text-transform: none; overflow: hidden; text-overflow: ellipsis; }
+.no-label .caption { display: none; }
+
+/* Status text (faults, thresholds). Never colour alone: text always says what it is. */
+.status { font-size: var(--fs-sub); color: var(--ink-2); display: flex; align-items: center; gap: 0.5em; min-height: 1.2em; }
+.status .dot { width: 0.7em; height: 0.7em; border-radius: 50%; background: var(--good); flex: none; }
+.status.warn .dot { background: var(--warn); }
+.status.crit .dot { background: var(--crit); }
+.status.warn { color: var(--warn); }
+.status.crit { color: var(--crit); }
+
+/* Problem overlay (bridge offline etc.) */
+.problem { position: absolute; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center;
+  background: var(--surface); color: var(--ink-2); text-align: center; padding: var(--pad); gap: calc(var(--u) * 2); }
+.problem .title { font-size: var(--fs-unit); color: var(--ink); }
+.problem .hint { font-size: var(--fs-sub); color: var(--ink-3); word-break: break-all; }
+body.problem-on .problem { display: flex; }
+
+/* Hero number layout (total current / total power) */
+.hero-wrap { flex: 1; display: flex; align-items: center; gap: var(--pad); min-height: 0; }
+.hero { display: flex; flex-direction: column; justify-content: center; min-width: 0; }
+.hero .value { font-size: var(--fs-hero); font-weight: 600; line-height: 1; letter-spacing: -0.02em; white-space: nowrap; }
+.hero .value .unit { font-size: var(--fs-unit); font-weight: 400; color: var(--ink-2); margin-left: 0.15em; }
+.hero .sub { font-size: var(--fs-sub); color: var(--ink-2); margin-top: calc(var(--u) * 2); white-space: nowrap; }
+.gauge { flex: none; height: calc(var(--u) * 58); aspect-ratio: 1 / 1; }
+.gauge svg { width: 100%; height: 100%; display: block; }
+.gauge .track { stroke: var(--track); }
+.gauge .fill { stroke: var(--accent); transition: stroke-dashoffset 0.4s ease; }
+.gauge.warn .fill { stroke: var(--warn); }
+.gauge.crit .fill { stroke: var(--crit); }
+
+/* Vertical slots: stack hero above gauge */
+@media (max-aspect-ratio: 1.2 / 1) {
+  .hero-wrap { flex-direction: column-reverse; justify-content: center; }
+  .hero { align-items: center; text-align: center; }
+  :root { --fs-hero: calc(var(--u) * 22); --fs-unit: calc(var(--u) * 8); }
+  .gauge { height: calc(var(--u) * 40); }
+}
