@@ -21,7 +21,8 @@
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
   .card { background: var(--card); border-radius: 12px; padding: 16px; }
   .card h3 { margin: 0 0 6px; font-size: 1.05rem; }
-  .card .url { display: block; word-break: break-all; color: var(--ink-2); margin: 8px 0; }
+  .card .url { display: block; word-break: break-all; color: var(--ink-2); margin: 2px 0 8px; }
+  .card .lbl { display: block; font-size: 0.8rem; color: var(--ink-3); margin-top: 6px; }
   .card iframe { width: 100%; aspect-ratio: 840 / 344; border: 0; border-radius: 8px; background: #000; }
   ol li { margin: 6px 0; color: var(--ink-2); }
   table { border-collapse: collapse; width: 100%; font-size: 0.95rem; }
@@ -45,6 +46,7 @@
     <li>Run the bridge from this repository: <code>python bridge/wireview_bridge.py</code> (Python 3.10+, no packages). It serves JSON at <code>http://localhost:8765/api/wireview</code> and also serves these widgets locally. <code>bridge/install-startup.ps1</code> makes it start at login.</li>
     <li>In iCUE, open the Xeneon Edge, add an <b>iFrame</b> widget, and paste one of the widget URLs above. Add <code>?wire_limit=10.5&amp;total_limit=55&amp;cable_w=600</code> to match the limits set in the WireView device.</li>
   </ol>
+  <p><b>Which URL?</b> The bridge serves an identical copy of these pages at <code>http://localhost:8765/…</code>. Use that in the iFrame widget: page and data share one origin, so nothing can block the fetch. The hosted copy here is an https page reaching into <code>localhost</code>, which recent Chromium builds (Chrome 138+) treat as a Local Network Access request that needs a permission grant; a browser will ask, but an embedded webview may silently deny. iCUE 5.51 ships Chromium 130, which predates the rule, so the hosted URLs should work in its iFrame widget today; if one ever shows "Bridge offline" while the localhost one works, that is why.</p>
 
   <h2>URL options</h2>
   <table>
@@ -69,11 +71,14 @@
     ['total-power', 'Total power', 'Headline watts with a gauge against the cable rating.'],
   ];
   const cards = document.getElementById('cards');
+  const local = 'http://localhost:8765/';
   widgets.forEach(([slug, title, desc]) => {
     const url = base + slug + '/';
     const card = document.createElement('div');
     card.className = 'card';
-    card.innerHTML = '<h3>' + title + '</h3><p>' + desc + '</p><a class="url" href="' + url + '">' + url + '</a>' +
+    card.innerHTML = '<h3>' + title + '</h3><p>' + desc + '</p>' +
+      '<span class="lbl">iFrame URL (served by the bridge, recommended)</span><a class="url" href="' + local + slug + '/">' + local + slug + '/</a>' +
+      '<span class="lbl">Hosted copy</span><a class="url" href="' + url + '">' + url + '</a>' +
       '<iframe src="' + slug + '/" title="' + title + ' preview" loading="lazy"></iframe>';
     cards.appendChild(card);
   });

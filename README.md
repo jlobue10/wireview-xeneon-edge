@@ -47,8 +47,22 @@ WireView Pro II ──USB──▶ HWiNFO64 (shared memory) ──▶ bridge/wir
    `http://localhost:8765/api/wireview` should return JSON with `"ok": true`.
    To start it at login: `powershell -ExecutionPolicy Bypass -File bridge\install-startup.ps1`.
 3. In iCUE select the Xeneon Edge, add an **iFrame** widget in the slot you want, and paste a
-   widget URL. Append query options to match your device limits, e.g.
-   `https://jlobue10.github.io/wireview-xeneon-edge/per-wire/?wire_limit=10.5`.
+   widget URL. Use the copy served by the bridge:
+   - `http://localhost:8765/per-wire/`
+   - `http://localhost:8765/total-current/`
+   - `http://localhost:8765/total-power/`
+
+   Append query options to match your device limits, e.g.
+   `http://localhost:8765/per-wire/?wire_limit=10.5&total_limit=55&cable_w=600`.
+
+   **Why not the GitHub Pages URL?** It works only where the webview allows an https page to
+   fetch `localhost`. Chromium 138+ classifies that as a Local Network Access request and asks
+   for permission; an embedded webview may deny it silently and the widget shows
+   "Bridge offline". Served from the bridge, page and data share one origin and nothing can
+   block it. iCUE 5.51 bundles Qt WebEngine 6.9 (Chromium 130), which predates that rule, so
+   the hosted URLs above should also work inside the iFrame widget today; the localhost form
+   is simply future-proof. The Pages site remains the documentation and a live preview when
+   your browser grants the permission.
 
 ## URL options
 
