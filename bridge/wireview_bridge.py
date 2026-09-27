@@ -3,8 +3,11 @@
 The Xeneon Edge widgets (hosted on GitHub Pages or served from this bridge)
 poll ``http://localhost:8765/api/wireview`` once a second. The bridge reads
 the WireView directly over USB serial (falling back to HWiNFO shared memory),
-caches for a short interval, and answers with permissive CORS so an https
-page may fetch it.
+caches for a short interval, and answers CORS requests only from the widget
+origins it knows (its own loopback origin and the GitHub Pages copy), so an
+arbitrary website open in a browser cannot read the readings. Requests whose
+``Host`` header is not a loopback name are refused, which also defeats DNS
+rebinding. The device's hardware UID is not served.
 
 Usage::
 
@@ -12,6 +15,7 @@ Usage::
     python wireview_bridge.py --port 9000
     python wireview_bridge.py --no-static   # JSON only
     python wireview_bridge.py --source hwinfo
+    python wireview_bridge.py --allow-origin https://example.github.io   # another widget host
 
 Requires pyserial for the direct USB path; standard library otherwise.
 """
@@ -37,6 +41,9 @@ from wireview_source import SOURCES, read_wireview  # noqa: E402
 DEFAULT_PORT = 8765
 CACHE_SECONDS = 0.25
 DOCS_DIR = Path(__file__).resolve().parent.parent / "docs"
+PAGES_ORIGIN = "https://jlobue10.github.io"   # the hosted copy of docs/
+LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "[::1]")
+PRIVATE_KEYS = ("uid",)                       # device fields never served
 
 
 class _Cache:
@@ -53,7 +60,14 @@ class _Cache:
         with self._lock:
             now = time.monotonic()
             if now - self._at > CACHE_SECONDS:
-                self._data = read_wireview(self.source, self.serial_port, bridge_url=None)
+                try:
+                    data = read_wireview(self.source, self.serial_port, bridge_url=None)
+                except Exception as e:  # a reader bug must not take the server down
+                    data = {"ok": False, "source": self.source, "status": "Reader error", "hint": str(e)[:200], "error": str(e)}
+                dev = data.get("device")
+                if isinstance(dev, dict):
+                    data["device"] = {k: v for k, v in dev.items() if k not in PRIVATE_KEYS}
+                self._data = data
                 src = self._data["source"] if self._data["ok"] else f"none ({self._data.get('status')}: {self._data.get('hint')})"
                 if src != self._last_source:
                     dev = self._data.get("device") or {}
@@ -69,26 +83,64 @@ _cache = _Cache()
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "WireViewBridge/1.0"
+    server_version = "WireViewBridge/1.1"
+    sys_version = ""                       # do not advertise the Python version
     static_root: Path | None = DOCS_DIR
+    allowed_origins: frozenset[str] = frozenset()   # filled in by main()
+    allowed_hosts: frozenset[str] | None = None     # None = any (non-loopback bind)
 
     def log_message(self, fmt: str, *args) -> None:  # quiet by default
         if os.environ.get("WIREVIEW_BRIDGE_LOG"):
             super().log_message(fmt, *args)
 
+    # -- access control -------------------------------------------------------
+    def _host_ok(self) -> bool:
+        """The Host header names this machine (blocks DNS rebinding)."""
+        if self.allowed_hosts is None:
+            return True
+        host = (self.headers.get("Host") or "").strip().lower()
+        return host in self.allowed_hosts
+
+    def _origin(self) -> str | None:
+        o = self.headers.get("Origin")
+        return o.strip().rstrip("/").lower() if o else None
+
+    def _origin_ok(self) -> bool:
+        """No Origin (same-origin page, curl, the Nexus daemon) or a known one."""
+        o = self._origin()
+        return o is None or o in self.allowed_origins
+
+    def _refuse(self, why: str) -> None:
+        self.send_error(HTTPStatus.FORBIDDEN, why)
+
     def _cors(self) -> None:
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "*")
-        self.send_header("Access-Control-Allow-Private-Network", "true")
+        o = self._origin()
+        if o is not None:   # only ever reached for an allowed origin
+            self.send_header("Access-Control-Allow-Origin", o)
+            self.send_header("Vary", "Origin")
+            self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "*")
+            self.send_header("Access-Control-Allow-Private-Network", "true")
         self.send_header("Cache-Control", "no-store")
 
     def do_OPTIONS(self) -> None:
+        if not self._host_ok():
+            self._refuse("unexpected Host header")
+            return
+        if not self._origin_ok():
+            self._refuse("origin not allowed")
+            return
         self.send_response(HTTPStatus.NO_CONTENT)
         self._cors()
         self.end_headers()
 
     def do_GET(self) -> None:
+        if not self._host_ok():
+            self._refuse("unexpected Host header")
+            return
+        if not self._origin_ok():
+            self._refuse("origin not allowed")
+            return
         path = urlsplit(self.path).path
         if path in ("/api/wireview", "/api/wireview/"):
             body = json.dumps(_cache.get()).encode()
@@ -138,7 +190,10 @@ class Handler(BaseHTTPRequestHandler):
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="WireView Pro II localhost bridge")
     ap.add_argument("--port", type=int, default=DEFAULT_PORT)
-    ap.add_argument("--bind", default="127.0.0.1", help="interface to bind (default localhost only)")
+    ap.add_argument("--bind", default="127.0.0.1",
+                    help="interface to bind (default localhost only; anything else exposes the readings to that network)")
+    ap.add_argument("--allow-origin", action="append", default=[], metavar="ORIGIN",
+                    help=f"extra web origin allowed to read the API, e.g. https://you.github.io (loopback and {PAGES_ORIGIN} are always allowed; repeatable)")
     ap.add_argument("--no-static", action="store_true", help="do not serve the docs/ widgets, JSON only")
     ap.add_argument("--source", choices=[s for s in SOURCES if s != "bridge"], default="auto", help="serial (direct USB), hwinfo, or auto (default)")
     ap.add_argument("--serial-port", metavar="COMx", default=None, help="WireView COM port (default: auto-detect)")
@@ -153,8 +208,24 @@ def main(argv: list[str] | None = None) -> int:
     # Browsers resolve "localhost" to ::1 first on Windows, so listen on both
     # loopback families when binding to the default address.
     binds = [args.bind]
+    loopback = args.bind in ("127.0.0.1", "localhost", "::1")
     if args.bind in ("127.0.0.1", "localhost"):
         binds = ["127.0.0.1", "::1"]
+
+    origins = {f"http://{h}:{args.port}" for h in LOOPBACK_HOSTS} | {PAGES_ORIGIN}
+    if args.port == 80:
+        origins |= {f"http://{h}" for h in LOOPBACK_HOSTS}
+    origins |= {o.strip().rstrip("/").lower() for o in args.allow_origin if o.strip()}
+    Handler.allowed_origins = frozenset(origins)
+    if loopback:
+        hosts = {f"{h}:{args.port}" for h in LOOPBACK_HOSTS}
+        if args.port == 80:
+            hosts |= set(LOOPBACK_HOSTS)
+        Handler.allowed_hosts = frozenset(hosts)
+    else:
+        Handler.allowed_hosts = None
+        print(f"WARNING: --bind {args.bind} makes the readings and widgets reachable from that network; "
+              "the Host check is off. Prefer the default loopback bind.", flush=True)
     servers = []
     for b in binds:
         family = socket.AF_INET6 if ":" in b else socket.AF_INET

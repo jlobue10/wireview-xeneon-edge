@@ -118,7 +118,7 @@ def read_wireview() -> dict[str, Any]:
             continue
         label = r["label"]
         v = r["value"]
-        if label.startswith("Pin ") and label[4].isdigit():
+        if label.startswith("Pin ") and len(label) > 5 and label[4].isdigit():
             n = int(label[4])
             kind = label[6:].strip().lower()
             if n in pins and kind in ("voltage", "current", "power"):

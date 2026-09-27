@@ -41,6 +41,12 @@ SOURCES = ("auto", "serial", "hwinfo", "bridge")
 DEFAULT_BRIDGE_URL = "http://localhost:8765/api/wireview"
 _RETRY_S = 2.0        # how often to retry opening a busy/missing COM port
 _BRIDGE_RETRY_S = 5.0  # how often to look for a bridge that was not answering
+_BRIDGE_MAX_BYTES = 64 * 1024
+_TEXT_MAX = 200
+
+# Loopback requests must not be sent through an HTTP(S)_PROXY from the
+# environment; urllib only skips the proxy when no_proxy says so.
+_bridge_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
 class _SerialState:
@@ -136,6 +142,56 @@ def _release_serial() -> None:
             _serial.dev = None
 
 
+def _num(v: Any) -> float | None:
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
+def _text(v: Any) -> str | None:
+    return v[:_TEXT_MAX] if isinstance(v, str) else None
+
+
+def _flags(v: Any) -> dict[str, bool]:
+    return {k: bool(x) for k, x in v.items() if isinstance(k, str)} if isinstance(v, dict) else {}
+
+
+def _shape_bridge(data: Any) -> dict[str, Any]:
+    """Coerce a bridge reply into the dict shape, dropping anything odd.
+
+    Whatever answers on the bridge port is another local process; treat its
+    JSON as untrusted so a wrong type cannot crash the caller's render loop.
+    """
+    out = _blank("bridge")
+    if not isinstance(data, dict):
+        out.update(status="Bad bridge reply", hint="not a JSON object")
+        return out
+    out["ok"] = data.get("ok") is True
+    out["device_found"] = bool(data.get("device_found"))
+    out["hwinfo_running"] = bool(data.get("hwinfo_running"))
+    for k in ("status", "hint", "error"):
+        out[k] = _text(data.get(k))
+    for k in ("poll_time", "total_current", "total_power", "avg_voltage", "temp_in", "temp_out", "vdd", "cable_w"):
+        out[k] = _num(data.get(k))
+    fd = _num(data.get("fan_duty"))
+    out["fan_duty"] = int(fd) if fd is not None else None
+    ext = data.get("temp_ext")
+    out["temp_ext"] = [_num(ext[i]) if isinstance(ext, list) and i < len(ext) else None for i in range(2)]
+    pins = data.get("pins")
+    out["pins"] = [
+        {"n": i + 1, "voltage": _num(pn.get("voltage")), "current": _num(pn.get("current")), "power": _num(pn.get("power"))}
+        for i, pn in enumerate(pins[:6] if isinstance(pins, list) else []) if isinstance(pn, dict)
+    ]
+    out["faults"] = _flags(data.get("faults"))
+    out["faults_logged"] = _flags(data.get("faults_logged"))
+    dev = data.get("device")
+    if isinstance(dev, dict):
+        fw = _num(dev.get("fw"))
+        out["device"] = {"port": _text(dev.get("port")), "fw": int(fw) if fw is not None else None,
+                         "uid": _text(dev.get("uid")), "build": _text(dev.get("build"))}
+    if out["ok"] and (out["total_current"] is None or not out["pins"]):
+        out.update(ok=False, status="Bad bridge reply", hint="readings missing")
+    return out
+
+
 def _read_bridge(url: str) -> dict[str, Any] | None:
     """Readings from a running bridge, or None when nothing answers there."""
     st = _bridge
@@ -144,17 +200,14 @@ def _read_bridge(url: str) -> dict[str, Any] | None:
         if now < st.next_try:
             return None
         try:
-            with urllib.request.urlopen(url, timeout=0.5) as r:
-                data = json.loads(r.read().decode())
+            with _bridge_opener.open(url, timeout=0.5) as r:
+                data = json.loads(r.read(_BRIDGE_MAX_BYTES).decode())
         except (urllib.error.URLError, OSError, ValueError) as e:
             st.last_error = str(e)
             st.next_try = now + _BRIDGE_RETRY_S
             return None
         st.next_try = 0.0
-    out = _blank("bridge")
-    if isinstance(data, dict):
-        out.update(data)
-    out["source"] = "bridge"
+    out = _shape_bridge(data)
     if out["ok"] and out.get("poll_time"):
         out["age_s"] = round(time.time() - out["poll_time"], 3)
     elif not out["ok"] and not out.get("status"):

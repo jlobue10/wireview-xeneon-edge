@@ -11,7 +11,9 @@ on a [Corsair Xeneon Edge](https://www.corsair.com/us/en/s/xeneon-edge), through
 
 The widgets are plain HTML pages. A tiny **bridge** on the same PC reads the WireView
 **straight over USB serial** and serves the readings as JSON on `http://localhost:8765`, and
-serves the widget pages too. No HWiNFO, no Thermal Grizzly app; nothing leaves the machine.
+serves the widget pages too. No HWiNFO, no Thermal Grizzly app; nothing leaves the machine,
+and only the widget pages (the bridge's own origin and the GitHub Pages copy) may read the
+JSON from a browser.
 
 ## Install
 
@@ -40,6 +42,14 @@ and starts it. Then:
 
 Re-running the installer updates the files and restarts the bridge. Remove everything with
 `install.ps1 -Uninstall` (from `%LOCALAPPDATA%\wireview-xeneon-edge`).
+
+The installer fetches the latest tagged release (or `main` while there is none) and prints the
+archive's SHA-256. To install exactly what you reviewed, pass `-Ref <tag|branch|commit>` and
+optionally `-Sha256 <hash>`:
+
+```
+powershell -ExecutionPolicy Bypass -c "& ([scriptblock]::Create((irm https://raw.githubusercontent.com/jlobue10/wireview-xeneon-edge/main/install.ps1))) -Ref v1.0.0 -Sha256 <hash>"
+```
 
 <details>
 <summary>Manual setup from a clone</summary>
@@ -73,8 +83,12 @@ WireView Pro II ──USB serial (COMx, 115200 8N1)──▶ bridge/wireview_bri
   force one; `--serial-port COM5` overrides auto-detection by USB ID 0483:5740.
 - While the bridge holds the port, HWiNFO's own WireView sensor stops updating; it resumes
   when the bridge exits.
-- The bridge answers with permissive CORS and also serves `docs/`, so
-  `http://localhost:8765/per-wire/` works without GitHub Pages.
+- The bridge also serves `docs/`, so `http://localhost:8765/per-wire/` works without GitHub
+  Pages. Cross-origin reads of the JSON are allowed only from its own loopback origin and
+  `https://jlobue10.github.io`; add others with `--allow-origin`. Requests whose `Host`
+  header is not a loopback name are refused (DNS rebinding), and the device's hardware UID
+  is never served, so a random website open in your browser cannot read or fingerprint the
+  device. Everything else on the PC (the Nexus daemon, `curl`) reads it freely.
 
 **Which URL in iCUE?** The same pages are hosted at
 <https://jlobue10.github.io/wireview-xeneon-edge/>, but that is an https page reaching into
@@ -111,7 +125,7 @@ The pages size themselves with `vmin` units and were checked at every Xeneon Edg
 ```json
 {
   "ok": true, "source": "serial", "device_found": true, "poll_time": 1790473743.8, "age_s": 0.0,
-  "device": {"port": "COM5", "fw": 5, "uid": "A100...", "build": "TG-WV-PRO2-FW_20260430_1838"},
+  "device": {"port": "COM5", "fw": 5, "build": "TG-WV-PRO2-FW_20260430_1838"},
   "pins": [{"n": 1, "voltage": 12.04, "current": 2.22, "power": 26.7}, "... 6 entries"],
   "total_current": 12.49, "total_power": 150.4, "avg_voltage": 12.04,
   "temp_in": 35.5, "temp_out": 35.8, "temp_ext": [null, null], "vdd": 3.417, "fan_duty": 0,
@@ -124,7 +138,9 @@ The pages size themselves with `vmin` units and were checked at every Xeneon Edg
 
 When there is no reading, `ok` is false and `status` / `hint` say why (for example
 `"COM port busy"` / `"close the WireView app (and HWiNFO)"`). `GET /api/health` returns
-`{"ok": true}`. Options: `--port`, `--bind`, `--no-static`, `--source`, `--serial-port`.
+`{"ok": true}`. Options: `--port`, `--bind`, `--no-static`, `--source`, `--serial-port`,
+`--allow-origin`. `--bind` other than loopback exposes the readings and widgets to that
+network and turns the `Host` check off; leave it at the default unless you mean that.
 
 ## Companion project
 

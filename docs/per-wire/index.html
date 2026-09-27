@@ -63,7 +63,9 @@
     body.classList.remove('problem-on');
     let worst = 'ok';
     d.pins.forEach(function (pin, i) {
-      const c = cells[i], I = pin.current;
+      const c = cells[i];
+      if (!c || !pin) return;
+      const I = pin.current;
       c.v.textContent = WV.fmt(I);
       c.w.textContent = WV.fmt(pin.power, 0) + ' W';
       const lv = WV.level(I, cfg.wireLimit);
