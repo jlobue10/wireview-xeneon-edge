@@ -5,6 +5,11 @@ HWiNFO (8.41 or newer) reads the WireView Pro II directly over USB and, when
 block named ``Global\\HWiNFO_SENS_SM2``. This module maps that block, finds the
 WireView sensor, and returns its readings as a plain dict.
 
+The producer is not trusted: every offset, count and record size in the header
+is checked against the real size of the mapped view before any native read,
+the arrays are snapshotted once and parsed from the copy, and counts are capped.
+A malformed block yields ``HwinfoUnavailable`` rather than a bad dereference.
+
 No third-party packages are required; only ``ctypes`` on Windows.
 """
 
@@ -12,8 +17,9 @@ from __future__ import annotations
 
 import ctypes
 import struct
+import sys
 import time
-from typing import Any
+from typing import Any, Callable
 
 _MAPPING_NAME = "Global\\HWiNFO_SENS_SM2"
 _FILE_MAP_READ = 0x0004
@@ -21,61 +27,140 @@ _HEADER_FMT = "<4sIIqIIIIII"
 _HEADER_SIZE = struct.calcsize(_HEADER_FMT)
 _SENSOR_MATCH = "wireview"
 
-_k32 = ctypes.windll.kernel32
-_k32.OpenFileMappingW.restype = ctypes.c_void_p
-_k32.OpenFileMappingW.argtypes = (ctypes.c_uint32, ctypes.c_int, ctypes.c_wchar_p)
-_k32.MapViewOfFile.restype = ctypes.c_void_p
-_k32.MapViewOfFile.argtypes = (ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_size_t)
-_k32.UnmapViewOfFile.argtypes = (ctypes.c_void_p,)
-_k32.CloseHandle.argtypes = (ctypes.c_void_p,)
+# Record layouts we read (offsets within one record). A record may be larger
+# in a newer HWiNFO, never smaller.
+_SENSOR_MIN_SIZE = 8 + 128 + 128          # id, instance, name[128], user_name[128]
+_READING_MIN_SIZE = 284 + 4 * 8           # ... value, min, max, avg doubles at 284
+_MAX_RECORD_SIZE = 64 * 1024
+_MAX_SENSORS = 4096
+_MAX_READINGS = 65536
+_MAX_ARRAY_BYTES = 64 * 1024 * 1024
+
+
+class HwinfoUnavailable(RuntimeError):
+    """HWiNFO is not running, Shared Memory Support is off, or the block is malformed."""
 
 
 def _cstr(buf: bytes, start: int, length: int) -> str:
     return buf[start:start + length].split(b"\0", 1)[0].decode("latin-1")
 
 
-class HwinfoUnavailable(RuntimeError):
-    """HWiNFO is not running or Shared Memory Support is off."""
+def _span(off: int, n: int, size: int, total: int, what: str) -> int:
+    """Byte length of ``n`` records of ``size`` at ``off``; must fit in ``total``."""
+    if off < 0 or size < 0 or n < 0:
+        raise HwinfoUnavailable(f"negative {what} geometry")
+    length = n * size
+    if length > _MAX_ARRAY_BYTES or off + length > total:
+        raise HwinfoUnavailable(f"{what} array ({n} x {size} bytes at {off}) exceeds the {total}-byte mapping")
+    return length
 
 
-def read_shared_memory() -> dict[str, Any]:
-    """Return every HWiNFO sensor and reading as dicts.
+def parse_shared_memory(read: Callable[[int, int], bytes], total: int) -> dict[str, Any]:
+    """Parse an HWiNFO shared-memory block through a bounded ``read(off, n)``.
 
-    Raises HwinfoUnavailable when the mapping does not exist.
+    ``total`` is the size of the mapped view. Nothing is read before the
+    range has been checked against it, so ``read`` is never asked for bytes
+    outside the mapping. Pure, so it can be tested with a bytes-backed reader.
     """
-    handle = _k32.OpenFileMappingW(_FILE_MAP_READ, False, _MAPPING_NAME)
-    if not handle:
-        raise HwinfoUnavailable("HWiNFO shared memory not found (is HWiNFO running with Shared Memory Support on?)")
-    try:
-        view = _k32.MapViewOfFile(handle, _FILE_MAP_READ, 0, 0, 0)
-        if not view:
-            raise HwinfoUnavailable("MapViewOfFile failed")
+    if total < _HEADER_SIZE:
+        raise HwinfoUnavailable(f"mapping is {total} bytes, smaller than the {_HEADER_SIZE}-byte header")
+    header = read(0, _HEADER_SIZE)
+    if len(header) != _HEADER_SIZE:
+        raise HwinfoUnavailable("short header read")
+    sig, ver, rev, poll_time, s_off, s_sz, s_n, r_off, r_sz, r_n = struct.unpack(_HEADER_FMT, header)
+    if sig != b"HWiS":
+        raise HwinfoUnavailable(f"unexpected shared memory signature {sig!r}")
+    if not (_SENSOR_MIN_SIZE <= s_sz <= _MAX_RECORD_SIZE) or not (_READING_MIN_SIZE <= r_sz <= _MAX_RECORD_SIZE):
+        raise HwinfoUnavailable(f"unsupported record sizes (sensor {s_sz}, reading {r_sz})")
+    if s_n > _MAX_SENSORS or r_n > _MAX_READINGS:
+        raise HwinfoUnavailable(f"implausible record counts (sensors {s_n}, readings {r_n})")
+    s_len = _span(s_off, s_n, s_sz, total, "sensor")
+    r_len = _span(r_off, r_n, r_sz, total, "reading")
+
+    # Snapshot both arrays once; the producer may rewrite the block while we parse.
+    s_blob = read(s_off, s_len) if s_len else b""
+    r_blob = read(r_off, r_len) if r_len else b""
+    if len(s_blob) != s_len or len(r_blob) != r_len:
+        raise HwinfoUnavailable("short array read")
+
+    sensors = []
+    for i in range(s_n):
+        b = s_blob[i * s_sz:(i + 1) * s_sz]
+        sid, inst = struct.unpack_from("<II", b, 0)
+        sensors.append({"id": sid, "instance": inst, "name": _cstr(b, 8, 128), "user_name": _cstr(b, 136, 128)})
+    readings = []
+    for i in range(r_n):
+        b = r_blob[i * r_sz:(i + 1) * r_sz]
+        rtype, sidx, rid = struct.unpack_from("<III", b, 0)
+        value, vmin, vmax, vavg = struct.unpack_from("<dddd", b, 284)
+        readings.append({
+            "type": rtype, "sensor": sidx, "id": rid,
+            "label": _cstr(b, 12, 128), "user_label": _cstr(b, 140, 128),
+            "unit": _cstr(b, 268, 16),
+            "value": value, "min": vmin, "max": vmax, "avg": vavg,
+        })
+    return {"version": ver, "revision": rev, "poll_time": poll_time, "sensors": sensors, "readings": readings}
+
+
+if sys.platform == "win32":
+    _k32 = ctypes.windll.kernel32
+    _k32.OpenFileMappingW.restype = ctypes.c_void_p
+    _k32.OpenFileMappingW.argtypes = (ctypes.c_uint32, ctypes.c_int, ctypes.c_wchar_p)
+    _k32.MapViewOfFile.restype = ctypes.c_void_p
+    _k32.MapViewOfFile.argtypes = (ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_size_t)
+    _k32.UnmapViewOfFile.argtypes = (ctypes.c_void_p,)
+    _k32.CloseHandle.argtypes = (ctypes.c_void_p,)
+
+    class _MBI(ctypes.Structure):
+        # MEMORY_BASIC_INFORMATION; PartitionId exists only on 64-bit Windows.
+        _fields_ = (
+            [("BaseAddress", ctypes.c_void_p), ("AllocationBase", ctypes.c_void_p), ("AllocationProtect", ctypes.c_uint32)]
+            + ([("PartitionId", ctypes.c_uint16)] if ctypes.sizeof(ctypes.c_void_p) == 8 else [])
+            + [("RegionSize", ctypes.c_size_t), ("State", ctypes.c_uint32), ("Protect", ctypes.c_uint32), ("Type", ctypes.c_uint32)]
+        )
+
+    _k32.VirtualQuery.restype = ctypes.c_size_t
+    _k32.VirtualQuery.argtypes = (ctypes.c_void_p, ctypes.POINTER(_MBI), ctypes.c_size_t)
+    _MEM_COMMIT = 0x1000
+
+    def _view_size(view: int) -> int:
+        """Committed size of the mapped view starting at ``view``."""
+        mbi = _MBI()
+        if _k32.VirtualQuery(view, ctypes.byref(mbi), ctypes.sizeof(mbi)) == 0 or mbi.State != _MEM_COMMIT:
+            raise HwinfoUnavailable("VirtualQuery on the mapped view failed")
+        base = mbi.BaseAddress or 0
+        if base > view:
+            raise HwinfoUnavailable("VirtualQuery returned an unexpected region")
+        return int(mbi.RegionSize) - (view - base)
+
+    def read_shared_memory() -> dict[str, Any]:
+        """Return every HWiNFO sensor and reading as dicts.
+
+        Raises HwinfoUnavailable when the mapping does not exist or is malformed.
+        """
+        handle = _k32.OpenFileMappingW(_FILE_MAP_READ, False, _MAPPING_NAME)
+        if not handle:
+            raise HwinfoUnavailable("HWiNFO shared memory not found (is HWiNFO running with Shared Memory Support on?)")
         try:
-            header = ctypes.string_at(view, _HEADER_SIZE)
-            sig, ver, rev, poll_time, s_off, s_sz, s_n, r_off, r_sz, r_n = struct.unpack(_HEADER_FMT, header)
-            if sig != b"HWiS":
-                raise HwinfoUnavailable(f"unexpected shared memory signature {sig!r}")
-            sensors = []
-            for i in range(s_n):
-                b = ctypes.string_at(view + s_off + i * s_sz, s_sz)
-                sid, inst = struct.unpack_from("<II", b, 0)
-                sensors.append({"id": sid, "instance": inst, "name": _cstr(b, 8, 128), "user_name": _cstr(b, 136, 128)})
-            readings = []
-            for i in range(r_n):
-                b = ctypes.string_at(view + r_off + i * r_sz, r_sz)
-                rtype, sidx, rid = struct.unpack_from("<III", b, 0)
-                value, vmin, vmax, vavg = struct.unpack_from("<dddd", b, 284)
-                readings.append({
-                    "type": rtype, "sensor": sidx, "id": rid,
-                    "label": _cstr(b, 12, 128), "user_label": _cstr(b, 140, 128),
-                    "unit": _cstr(b, 268, 16),
-                    "value": value, "min": vmin, "max": vmax, "avg": vavg,
-                })
-            return {"version": ver, "revision": rev, "poll_time": poll_time, "sensors": sensors, "readings": readings}
+            view = _k32.MapViewOfFile(handle, _FILE_MAP_READ, 0, 0, 0)
+            if not view:
+                raise HwinfoUnavailable("MapViewOfFile failed")
+            try:
+                total = _view_size(view)
+
+                def read(off: int, n: int) -> bytes:
+                    if off < 0 or n < 0 or off + n > total:   # belt and braces; the parser checks first
+                        raise HwinfoUnavailable("read outside the mapped view refused")
+                    return ctypes.string_at(view + off, n)
+
+                return parse_shared_memory(read, total)
+            finally:
+                _k32.UnmapViewOfFile(view)
         finally:
-            _k32.UnmapViewOfFile(view)
-    finally:
-        _k32.CloseHandle(handle)
+            _k32.CloseHandle(handle)
+else:
+    def read_shared_memory() -> dict[str, Any]:
+        raise HwinfoUnavailable("HWiNFO shared memory exists only on Windows")
 
 
 _FAULT_KEYS = (

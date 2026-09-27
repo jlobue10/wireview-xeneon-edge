@@ -43,12 +43,27 @@ and starts it. Then:
 Re-running the installer updates the files and restarts the bridge. Remove everything with
 `install.ps1 -Uninstall` (from `%LOCALAPPDATA%\wireview-xeneon-edge`).
 
-The installer fetches the latest tagged release (or `main` while there is none) and prints the
-archive's SHA-256. To install exactly what you reviewed, pass `-Ref <tag|branch|commit>` and
-optionally `-Sha256 <hash>` (each release's notes list the archive hash):
+The installer fetches the latest tagged release and prints the archive's SHA-256. If the release
+lookup fails it stops rather than silently installing `main` (`-Ref main` selects the development
+branch on purpose).
+
+The one-liner above runs whatever `install.ps1` is on `main` today. To install exactly what you
+reviewed, fetch the bootstrap from the same tag and pass the archive hash from that release's
+notes:
 
 ```
-powershell -ExecutionPolicy Bypass -c "& ([scriptblock]::Create((irm https://raw.githubusercontent.com/jlobue10/wireview-xeneon-edge/main/install.ps1))) -Ref v1.0.0 -Sha256 <hash>"
+powershell -ExecutionPolicy Bypass -c "& ([scriptblock]::Create((irm https://raw.githubusercontent.com/jlobue10/wireview-xeneon-edge/v1.0.1/install.ps1))) -Ref v1.0.1 -Sha256 <hash>"
+```
+
+Fully verified, with no remote code before the check: download the release zip, compare its
+hash with the release notes, expand it, and run the installer from the extracted folder (it then
+installs in place):
+
+```
+Invoke-WebRequest https://github.com/jlobue10/wireview-xeneon-edge/archive/v1.0.1.zip -OutFile wireview-xeneon-edge-v1.0.1.zip
+(Get-FileHash wireview-xeneon-edge-v1.0.1.zip).Hash        # must equal the hash in the release notes
+Expand-Archive wireview-xeneon-edge-v1.0.1.zip -DestinationPath .
+powershell -ExecutionPolicy Bypass -File wireview-xeneon-edge-1.0.1\install.ps1
 ```
 
 <details>
@@ -89,6 +104,14 @@ WireView Pro II ──USB serial (COMx, 115200 8N1)──▶ bridge/wireview_bri
   header is not a loopback name are refused (DNS rebinding), and the device's hardware UID
   is never served, so a random website open in your browser cannot read or fingerprint the
   device. Everything else on the PC (the Nexus daemon, `curl`) reads it freely.
+- Programs that share the device through the bridge can check they are talking to the real
+  bridge and not to whatever else grabbed the port: append `?nonce=<hex>` and the reply carries
+  `X-WireView-Auth`, an HMAC-SHA256 over `nonce.body` keyed with a random per-user secret in
+  `%LOCALAPPDATA%\wireview\bridge.secret` (created on first start). wireview-nexus does this and
+  ignores any bridge that fails the check. The bridge also refuses to start if either loopback
+  address is already taken, so a stray listener cannot silently receive half the traffic.
+- Readings older than five seconds are reported as "Stale readings" rather than shown as OK,
+  both by the bridge and by the widgets.
 
 **Which URL in iCUE?** The same pages are hosted at
 <https://jlobue10.github.io/wireview-xeneon-edge/>, but that is an https page reaching into
@@ -138,9 +161,16 @@ The pages size themselves with `vmin` units and were checked at every Xeneon Edg
 
 When there is no reading, `ok` is false and `status` / `hint` say why (for example
 `"COM port busy"` / `"close the WireView app (and HWiNFO)"`). `GET /api/health` returns
-`{"ok": true}`. Options: `--port`, `--bind`, `--no-static`, `--source`, `--serial-port`,
-`--allow-origin`. `--bind` other than loopback exposes the readings and widgets to that
+`{"ok": true}`. `served_at` is when the bridge produced the reply; with `?nonce=<hex>` the
+`X-WireView-Auth` header authenticates it (see above). Options: `--port`, `--bind`,
+`--no-static`, `--source`, `--serial-port`, `--allow-origin`, `--version`. `--bind` other than loopback exposes the readings and widgets to that
 network and turns the `Host` check off; leave it at the default unless you mean that.
+
+## Tests
+
+`python tests/test_hardening.py` runs the regression checks for the access model (CORS, Host,
+HMAC, static containment, worker cap, IPv6 collision, deadlines, freshness, non-finite values,
+HWiNFO block bounds) on Linux or macOS with stubs; no hardware needed.
 
 ## Companion project
 

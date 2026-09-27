@@ -9,6 +9,11 @@ arbitrary website open in a browser cannot read the readings. Requests whose
 ``Host`` header is not a loopback name are refused, which also defeats DNS
 rebinding. The device's hardware UID is not served.
 
+Programs that share the device through this bridge (wireview-nexus) send a
+``nonce`` query parameter; the reply carries ``X-WireView-Auth``, an HMAC over
+nonce and body keyed with a per-user secret file, so a client can tell this
+bridge from any other process that happens to own the port.
+
 Usage::
 
     python wireview_bridge.py               # port 8765, serves ../docs too
@@ -23,6 +28,7 @@ Requires pyserial for the direct USB path; standard library otherwise.
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import mimetypes
 import os
@@ -33,17 +39,29 @@ import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from wireview_source import SOURCES, read_wireview  # noqa: E402
+from wireview_source import (  # noqa: E402
+    AUTH_HEADER, SOURCES, bridge_secret, bridge_secret_path, bridge_sign, read_wireview, valid_nonce,
+)
 
+VERSION = "1.0.1"
 DEFAULT_PORT = 8765
 CACHE_SECONDS = 0.25
 DOCS_DIR = Path(__file__).resolve().parent.parent / "docs"
 PAGES_ORIGIN = "https://jlobue10.github.io"   # the hosted copy of docs/
 LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "[::1]")
 PRIVATE_KEYS = ("uid",)                       # device fields never served
+REQUEST_TIMEOUT_S = 10                        # idle socket timeout per request
+MAX_WORKERS = 32                              # concurrent connections
+MAX_STATIC_BYTES = 8 * 1024 * 1024
+
+# errno values meaning "this address family is not available here", for which
+# skipping the IPv6 listener is correct. Anything else (address in use!) is not.
+_AF_UNAVAILABLE = {
+    getattr(errno, name) for name in ("EAFNOSUPPORT", "EADDRNOTAVAIL", "EPFNOSUPPORT", "EPROTONOSUPPORT") if hasattr(errno, name)
+} | {10047, 10049, 10043}   # WSAEAFNOSUPPORT, WSAEADDRNOTAVAIL, WSAEPROTONOSUPPORT
 
 
 class _Cache:
@@ -83,11 +101,13 @@ _cache = _Cache()
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "WireViewBridge/1.0.0"
+    server_version = f"WireViewBridge/{VERSION}"
     sys_version = ""                       # do not advertise the Python version
+    timeout = REQUEST_TIMEOUT_S            # a peer that stops sending is dropped
     static_root: Path | None = DOCS_DIR
     allowed_origins: frozenset[str] = frozenset()   # filled in by main()
     allowed_hosts: frozenset[str] | None = None     # None = any (non-loopback bind)
+    secret: bytes | None = None                     # for X-WireView-Auth
 
     def log_message(self, fmt: str, *args) -> None:  # quiet by default
         if os.environ.get("WIREVIEW_BRIDGE_LOG"):
@@ -123,42 +143,44 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Private-Network", "true")
         self.send_header("Cache-Control", "no-store")
 
-    def do_OPTIONS(self) -> None:
+    def _gate(self) -> bool:
         if not self._host_ok():
             self._refuse("unexpected Host header")
-            return
+            return False
         if not self._origin_ok():
             self._refuse("origin not allowed")
+            return False
+        return True
+
+    def do_OPTIONS(self) -> None:
+        if not self._gate():
             return
         self.send_response(HTTPStatus.NO_CONTENT)
         self._cors()
         self.end_headers()
 
+    # -- responses ------------------------------------------------------------
+    def _send_json(self, body: bytes, nonce: str | None = None) -> None:
+        self.send_response(HTTPStatus.OK)
+        self._cors()
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        if nonce is not None and self.secret is not None and valid_nonce(nonce):
+            self.send_header(AUTH_HEADER, bridge_sign(self.secret, nonce, body))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self) -> None:
-        if not self._host_ok():
-            self._refuse("unexpected Host header")
+        if not self._gate():
             return
-        if not self._origin_ok():
-            self._refuse("origin not allowed")
-            return
-        path = urlsplit(self.path).path
+        parts = urlsplit(self.path)
+        path = parts.path
         if path in ("/api/wireview", "/api/wireview/"):
-            body = json.dumps(_cache.get()).encode()
-            self.send_response(HTTPStatus.OK)
-            self._cors()
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            nonce = parse_qs(parts.query).get("nonce", [None])[0]
+            self._send_json(json.dumps(_cache.get()).encode(), nonce)
             return
         if path == "/api/health":
-            body = b'{"ok":true}'
-            self.send_response(HTTPStatus.OK)
-            self._cors()
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            self._send_json(b'{"ok":true}')
             return
         self._serve_static(path)
 
@@ -168,14 +190,21 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(HTTPStatus.NOT_FOUND)
             return
         rel = path.lstrip("/")
-        target = (root / rel).resolve() if rel else root.resolve()
-        if root.resolve() not in target.parents and target != root.resolve():
-            self.send_error(HTTPStatus.FORBIDDEN)
-            return
+        target = root / rel if rel else root
         if target.is_dir():
             target = target / "index.html"
+        # Resolve the *final* file (after the index was appended) and require
+        # it to live under docs/, so neither ".." nor a symlink escapes.
+        target = target.resolve()
+        root_r = root.resolve()
+        if root_r not in target.parents:
+            self.send_error(HTTPStatus.FORBIDDEN)
+            return
         if not target.is_file():
             self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        if target.stat().st_size > MAX_STATIC_BYTES:
+            self.send_error(HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
             return
         ctype = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
         data = target.read_bytes()
@@ -185,6 +214,41 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
+
+
+class _Server(ThreadingHTTPServer):
+    daemon_threads = True
+    # On Windows SO_REUSEADDR lets a second copy bind the same port silently,
+    # so insist on exclusive use there; elsewhere keep the usual fast restart.
+    allow_reuse_address = sys.platform != "win32"
+    _slots = threading.BoundedSemaphore(MAX_WORKERS)   # shared by both listeners
+
+    def __init__(self, addr, handler, family):
+        self.address_family = family
+        super().__init__(addr, handler)
+
+    def server_bind(self) -> None:
+        if sys.platform == "win32":
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+    # Cap concurrent workers: a flood of half-open connections cannot spawn
+    # threads without limit. Over the cap, the connection is simply closed.
+    def process_request(self, request, client_address) -> None:
+        if not self._slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -197,6 +261,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--no-static", action="store_true", help="do not serve the docs/ widgets, JSON only")
     ap.add_argument("--source", choices=[s for s in SOURCES if s != "bridge"], default="auto", help="serial (direct USB), hwinfo, or auto (default)")
     ap.add_argument("--serial-port", metavar="COMx", default=None, help="WireView COM port (default: auto-detect)")
+    ap.add_argument("--version", action="version", version=f"wireview-bridge {VERSION}")
     args = ap.parse_args(argv)
 
     _Cache.source = args.source
@@ -204,6 +269,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.no_static or not DOCS_DIR.is_dir():
         Handler.static_root = None
+
+    Handler.secret = bridge_secret(create=True)
+    if Handler.secret is None:
+        print(f"WARNING: cannot create the bridge secret at {bridge_secret_path()}; "
+              "other programs will not trust this bridge and will keep the COM port to themselves.", flush=True)
 
     # Browsers resolve "localhost" to ::1 first on Windows, so listen on both
     # loopback families when binding to the default address.
@@ -226,18 +296,24 @@ def main(argv: list[str] | None = None) -> int:
         Handler.allowed_hosts = None
         print(f"WARNING: --bind {args.bind} makes the readings and widgets reachable from that network; "
               "the Host check is off. Prefer the default loopback bind.", flush=True)
+
     servers = []
     for b in binds:
         family = socket.AF_INET6 if ":" in b else socket.AF_INET
         try:
             srv = _Server((b, args.port), Handler, family)
         except OSError as e:
-            if b == "::1":
-                continue  # IPv6 loopback disabled on this machine
-            raise SystemExit(f"cannot bind {b}:{args.port}: {e}")
+            if b == "::1" and e.errno in _AF_UNAVAILABLE:
+                continue  # IPv6 loopback really is unavailable on this machine
+            # Anything else, in particular "address in use" on either family,
+            # is a collision: another process would receive some of the
+            # traffic meant for this bridge. Refuse to start half-bound.
+            for s in servers:
+                s.server_close()
+            raise SystemExit(f"cannot bind {b}:{args.port}: {e}. Is another bridge (or another program) already listening there?")
         servers.append(srv)
         host = f"[{b}]" if ":" in b else b
-        print(f"WireView bridge listening on http://{host}:{args.port}/api/wireview", flush=True)
+        print(f"WireView bridge {VERSION} listening on http://{host}:{args.port}/api/wireview", flush=True)
     if Handler.static_root:
         print(f"Serving widgets from {Handler.static_root} at http://localhost:{args.port}/", flush=True)
     threads = [threading.Thread(target=s.serve_forever, daemon=True) for s in servers]
@@ -252,22 +328,6 @@ def main(argv: list[str] | None = None) -> int:
         for s in servers:
             s.shutdown()
     return 0
-
-
-class _Server(ThreadingHTTPServer):
-    daemon_threads = True
-    # On Windows SO_REUSEADDR lets a second copy bind the same port silently,
-    # so insist on exclusive use there; elsewhere keep the usual fast restart.
-    allow_reuse_address = sys.platform != "win32"
-
-    def __init__(self, addr, handler, family):
-        self.address_family = family
-        super().__init__(addr, handler)
-
-    def server_bind(self) -> None:
-        if sys.platform == "win32":
-            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
-        super().server_bind()
 
 
 if __name__ == "__main__":

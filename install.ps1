@@ -4,8 +4,11 @@
 #   powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/jlobue10/wireview-xeneon-edge/main/install.ps1 | iex"
 # With options:
 #   powershell -ExecutionPolicy Bypass -c "& ([scriptblock]::Create((irm https://raw.githubusercontent.com/jlobue10/wireview-xeneon-edge/main/install.ps1))) -ExtraArgs '--port 9000'"
-# Pin what gets installed (a tag, branch or commit; -Sha256 also checks the archive):
-#   ... -Ref v1.0.0 -Sha256 <hash printed by a previous run or in the release notes>
+# Pin what gets installed. Fetch the bootstrap from the SAME tag, otherwise main's installer
+# runs before anything is verified:
+#   powershell -ExecutionPolicy Bypass -c "& ([scriptblock]::Create((irm https://raw.githubusercontent.com/jlobue10/wireview-xeneon-edge/v1.0.1/install.ps1))) -Ref v1.0.1 -Sha256 <hash from the release notes>"
+# Fully verified: download the release zip, compare its SHA-256 with the release notes, expand
+# it, and run install.ps1 from the extracted folder (installs in place; -Ref/-Sha256 unused).
 # From a clone (installs in place):
 #   powershell -ExecutionPolicy Bypass -File install.ps1 [-ExtraArgs '--port 9000'] [-NoStart]
 # Remove:
@@ -61,26 +64,37 @@ if ($Uninstall) {
 }
 
 # --- get the files ----------------------------------------------------------
+if ($inPlace -and ($Ref -or $Sha256)) {
+    Say "Installing in place from $scriptDir; -Ref/-Sha256 apply only to downloads (verify the archive you extracted instead)."
+}
 if (-not $inPlace) {
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     if (-not $Ref) {
-        # Prefer the latest tagged release; fall back to main while there is none.
-        try { $Ref = (Invoke-RestMethod -UseBasicParsing "https://api.github.com/repos/$Repo/releases/latest").tag_name } catch { $Ref = 'main' }
+        # Default to the latest tagged release. Never fall back to main silently: a lookup
+        # failure must not turn a release install into a development-branch install.
+        try { $Ref = (Invoke-RestMethod -UseBasicParsing "https://api.github.com/repos/$Repo/releases/latest").tag_name }
+        catch { throw "Could not look up the latest release of $Repo ($($_.Exception.Message)). Pass -Ref <tag> to choose one, or -Ref main for the development branch." }
+        if (-not $Ref) { throw "GitHub returned no release tag for $Repo. Pass -Ref <tag> or -Ref main." }
     }
     Say "Downloading $Repo@$Ref to $Dir"
-    $zip = Join-Path $env:TEMP "$Name.zip"
-    Invoke-WebRequest -UseBasicParsing "https://github.com/$Repo/archive/$Ref.zip" -OutFile $zip
-    $hash = (Get-FileHash $zip -Algorithm SHA256).Hash
-    Say "Archive SHA256: $hash"
-    if ($Sha256 -and $hash -ne $Sha256.ToUpper()) { Remove-Item $zip; throw "SHA256 mismatch: expected $Sha256" }
-    $tmp = Join-Path $env:TEMP "$Name-extract"
-    if (Test-Path $tmp) { Remove-Item -Recurse -Force $tmp }
-    Expand-Archive $zip -DestinationPath $tmp
-    $src = Get-ChildItem $tmp | Select-Object -First 1
-    New-Item -ItemType Directory -Force $Dir | Out-Null
-    # Keep an existing venv; refresh everything else.
-    Get-ChildItem $src.FullName | ForEach-Object { Copy-Item -Recurse -Force $_.FullName $Dir }
-    Remove-Item -Recurse -Force $tmp, $zip
+    # Fresh private staging directory; nothing predictable is reused between runs.
+    $stage = Join-Path $env:TEMP ("$Name-" + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $stage | Out-Null
+    try {
+        $zip = Join-Path $stage 'src.zip'
+        Invoke-WebRequest -UseBasicParsing "https://github.com/$Repo/archive/$Ref.zip" -OutFile $zip
+        $hash = (Get-FileHash $zip -Algorithm SHA256).Hash
+        Say "Archive SHA256: $hash"
+        if ($Sha256 -and $hash -ne $Sha256.ToUpper()) { throw "SHA256 mismatch: expected $Sha256, got $hash" }
+        $tmp = Join-Path $stage 'extract'
+        Expand-Archive $zip -DestinationPath $tmp
+        $src = Get-ChildItem $tmp | Select-Object -First 1
+        New-Item -ItemType Directory -Force $Dir | Out-Null
+        # Keep an existing venv; refresh everything else.
+        Get-ChildItem $src.FullName | ForEach-Object { Copy-Item -Recurse -Force $_.FullName $Dir }
+    } finally {
+        Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
+    }
 }
 Set-Location $Dir
 

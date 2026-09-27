@@ -17,13 +17,15 @@
 (function () {
   const q = new URLSearchParams(location.search);
   const num = (k, d) => { const v = parseFloat(q.get(k)); return Number.isFinite(v) ? v : d; };
+  const pos = (k, d) => { const v = num(k, d); return v > 0 ? v : d; };   // limits must be positive
+  const STALE_S = 5, SERVED_STALE_S = 10;
   const hex = (k) => { const v = q.get(k); return v && /^[0-9a-fA-F]{3,8}$/.test(v) ? '#' + v : null; };
 
   const cfg = {
     host: (q.get('host') || 'http://localhost:8765').replace(/\/+$/, ''),
-    wireLimit: num('wire_limit', 10.5),
-    totalLimit: num('total_limit', 55),
-    cableW: num('cable_w', 600),
+    wireLimit: pos('wire_limit', 10.5),
+    totalLimit: pos('total_limit', 55),
+    cableW: pos('cable_w', 600),
     cableWSet: q.has('cable_w'),
     interval: Math.max(250, num('interval', 1000)),
     decimals: Math.max(0, Math.min(3, num('decimals', 2))),
@@ -91,7 +93,14 @@
   // Offline / error copy shared by every widget.
   function problemText(d, err) {
     if (err || !d) return { title: 'Bridge offline', hint: cfg.host };
-    if (d.ok) return null;
+    if (d.ok) {
+      // Never show old numbers as healthy: the reading itself must be fresh
+      // and the bridge must still be producing replies.
+      const now = Date.now() / 1000;
+      if (typeof d.age_s === 'number' && d.age_s > STALE_S) return { title: 'Stale readings', hint: 'source stopped updating' };
+      if (typeof d.served_at === 'number' && now - d.served_at > SERVED_STALE_S) return { title: 'Stale readings', hint: 'bridge stopped updating' };
+      return null;
+    }
     if (d.status) return { title: d.status, hint: d.hint || '' };
     // Older bridge without status/hint fields.
     if (d.hwinfo_running === false) return { title: 'HWiNFO not running', hint: 'start HWiNFO64 with Shared Memory on' };
