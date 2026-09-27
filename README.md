@@ -45,7 +45,7 @@ Re-running the installer updates the files and restarts the bridge. Remove every
 
 The installer fetches the latest tagged release (or `main` while there is none) and prints the
 archive's SHA-256. To install exactly what you reviewed, pass `-Ref <tag|branch|commit>` and
-optionally `-Sha256 <hash>`:
+optionally `-Sha256 <hash>` (each release's notes list the archive hash):
 
 ```
 powershell -ExecutionPolicy Bypass -c "& ([scriptblock]::Create((irm https://raw.githubusercontent.com/jlobue10/wireview-xeneon-edge/main/install.ps1))) -Ref v1.0.0 -Sha256 <hash>"

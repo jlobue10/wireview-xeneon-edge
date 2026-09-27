@@ -83,7 +83,7 @@ _cache = _Cache()
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "WireViewBridge/1.1"
+    server_version = "WireViewBridge/1.0.0"
     sys_version = ""                       # do not advertise the Python version
     static_root: Path | None = DOCS_DIR
     allowed_origins: frozenset[str] = frozenset()   # filled in by main()
