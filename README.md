@@ -22,8 +22,9 @@ powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/jlo
 ```
 
 It downloads this repository to `%LOCALAPPDATA%\wireview-xeneon-edge`, installs Python 3.12
-with winget if no Python 3.10+ is present, creates a venv with pyserial, registers the bridge
-to start hidden at login, and starts it. Then:
+with winget if no Python 3.10+ is present, creates a venv with pyserial, registers a per-user
+Scheduled Task named "WireView Bridge" that runs the bridge at logon (no admin rights needed),
+and starts it. Then:
 
 1. **Close the Thermal Grizzly WireView app** and turn off its auto-start. Only one program
    can hold the WireView's USB serial port.
@@ -47,10 +48,10 @@ Re-running the installer updates the files and restarts the bridge. Remove every
 python -m venv venv
 venv\Scripts\pip install -r bridge\requirements.txt
 venv\Scripts\python bridge\wireview_bridge.py
-powershell -ExecutionPolicy Bypass -File bridge\install-startup.ps1   # start at login
+powershell -ExecutionPolicy Bypass -File install.ps1   # venv + run at logon
 ```
 
-`install.ps1` run from the clone does the same steps in place.
+The last line does the same steps in place. `-NoStart` registers without starting.
 </details>
 
 ## How it works
