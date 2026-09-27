@@ -185,11 +185,18 @@ def main(argv: list[str] | None = None) -> int:
 
 class _Server(ThreadingHTTPServer):
     daemon_threads = True
-    allow_reuse_address = True
+    # On Windows SO_REUSEADDR lets a second copy bind the same port silently,
+    # so insist on exclusive use there; elsewhere keep the usual fast restart.
+    allow_reuse_address = sys.platform != "win32"
 
     def __init__(self, addr, handler, family):
         self.address_family = family
         super().__init__(addr, handler)
+
+    def server_bind(self) -> None:
+        if sys.platform == "win32":
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
 
 
 if __name__ == "__main__":

@@ -36,7 +36,7 @@ $lnk = Join-Path $startup $Shortcut
 
 if ($Uninstall) {
     Say "Stopping $Name"
-    Get-CimInstance Win32_Process -Filter "Name='pythonw.exe' OR Name='python.exe'" |
+    Get-CimInstance Win32_Process -Filter "Name LIKE 'python%'" |   # python.exe, pythonw.exe, pythonw3.12.exe (Store)
         Where-Object { $_.CommandLine -like "*wireview_bridge.py*" } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
     if (Test-Path $lnk) { Remove-Item $lnk; Say "Removed startup entry $lnk" }
