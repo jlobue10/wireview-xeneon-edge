@@ -9,60 +9,79 @@ on a [Corsair Xeneon Edge](https://www.corsair.com/us/en/s/xeneon-edge), through
 |---|---|---|
 | ![per-wire](docs/img/per-wire_840x344.png) | ![total current](docs/img/total-current_840x344.png) | ![total power](docs/img/total-power_840x344.png) |
 
-The widgets are plain HTML pages hosted on GitHub Pages:
+The widgets are plain HTML pages. A tiny **bridge** on the same PC reads the WireView
+**straight over USB serial** and serves the readings as JSON on `http://localhost:8765`, and
+serves the widget pages too. No HWiNFO, no Thermal Grizzly app; nothing leaves the machine.
 
-- <https://jlobue10.github.io/wireview-xeneon-edge/per-wire/>
-- <https://jlobue10.github.io/wireview-xeneon-edge/total-current/>
-- <https://jlobue10.github.io/wireview-xeneon-edge/total-power/>
+## Install
 
-They read live values from a tiny **bridge** running on the same PC, which in turn reads
-HWiNFO's shared memory. Nothing leaves the machine; the hosted page only fetches
-`http://localhost:8765`.
-
-## How it works
+One command, in PowerShell:
 
 ```
-WireView Pro II ──USB──▶ HWiNFO64 (shared memory) ──▶ bridge/wireview_bridge.py ──localhost JSON──▶ widget page in iCUE iFrame
+powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/jlobue10/wireview-xeneon-edge/main/install.ps1 | iex"
 ```
 
-- HWiNFO 8.41+ supports the WireView Pro II natively (per-pin voltage/current/power, totals,
-  two temperatures and the fault flags). The Thermal Grizzly app has no export of its own and
-  cannot share the USB port with HWiNFO, so **close the WireView app** while HWiNFO runs.
-- The bridge (`bridge/`, Python 3.10+, standard library only) maps `Global\HWiNFO_SENS_SM2`,
-  picks the WireView sensor and serves it as JSON with CORS enabled. It also serves the widget
-  pages from `docs/`, so `http://localhost:8765/per-wire/` works without GitHub Pages.
+It downloads this repository to `%LOCALAPPDATA%\wireview-xeneon-edge`, installs Python 3.12
+with winget if no Python 3.10+ is present, creates a venv with pyserial, registers the bridge
+to start hidden at login, and starts it. Then:
 
-## Setup
-
-1. Install [HWiNFO64](https://www.hwinfo.com/download/) 8.41 or newer. Start it in
-   **Sensors-only** mode and enable **Settings → Main Settings → Shared Memory Support**.
-   Set it to run at startup (Settings → General → Auto Start) and disable the WireView app's
-   auto-start so they don't fight over the device.
-   The free HWiNFO build stops the shared-memory feed after 12 hours per session; HWiNFO Pro
-   removes the cap. If the feed stops, restart HWiNFO.
-2. Clone this repository and start the bridge:
-   ```
-   python bridge\wireview_bridge.py
-   ```
-   `http://localhost:8765/api/wireview` should return JSON with `"ok": true`.
-   To start it at login: `powershell -ExecutionPolicy Bypass -File bridge\install-startup.ps1`.
-3. In iCUE select the Xeneon Edge, add an **iFrame** widget in the slot you want, and paste a
-   widget URL. Use the copy served by the bridge:
+1. **Close the Thermal Grizzly WireView app** and turn off its auto-start. Only one program
+   can hold the WireView's USB serial port.
+2. Check <http://localhost:8765/api/wireview> shows `"ok": true`.
+3. In iCUE select the Xeneon Edge, add an **iFrame** widget in the slot you want, and paste
+   one of:
    - `http://localhost:8765/per-wire/`
    - `http://localhost:8765/total-current/`
    - `http://localhost:8765/total-power/`
 
-   Append query options to match your device limits, e.g.
-   `http://localhost:8765/per-wire/?wire_limit=10.5&total_limit=55&cable_w=600`.
+   Append query options to match your limits, e.g.
+   `http://localhost:8765/per-wire/?wire_limit=10.5&total_limit=55`.
 
-   **Why not the GitHub Pages URL?** It works only where the webview allows an https page to
-   fetch `localhost`. Chromium 138+ classifies that as a Local Network Access request and asks
-   for permission; an embedded webview may deny it silently and the widget shows
-   "Bridge offline". Served from the bridge, page and data share one origin and nothing can
-   block it. iCUE 5.51 bundles Qt WebEngine 6.9 (Chromium 130), which predates that rule, so
-   the hosted URLs above should also work inside the iFrame widget today; the localhost form
-   is simply future-proof. The Pages site remains the documentation and a live preview when
-   your browser grants the permission.
+Re-running the installer updates the files and restarts the bridge. Remove everything with
+`install.ps1 -Uninstall` (from `%LOCALAPPDATA%\wireview-xeneon-edge`).
+
+<details>
+<summary>Manual setup from a clone</summary>
+
+```
+python -m venv venv
+venv\Scripts\pip install -r bridge\requirements.txt
+venv\Scripts\python bridge\wireview_bridge.py
+powershell -ExecutionPolicy Bypass -File bridge\install-startup.ps1   # start at login
+```
+
+`install.ps1` run from the clone does the same steps in place.
+</details>
+
+## How it works
+
+```
+WireView Pro II ──USB serial (COMx, 115200 8N1)──▶ bridge/wireview_bridge.py ──localhost JSON──▶ widget page in iCUE iFrame
+```
+
+- `bridge/wireview_serial.py` speaks the WireView's serial protocol, as recovered by the Linux
+  community projects [wireview-pro-ii](https://github.com/Gustav0ar/wireview-pro-ii)
+  (`docs/protocol.md`) and [wireview-hwmon](https://github.com/emaspa/wireview-hwmon). Only
+  read-only commands are used (vendor data, UID, build info, sensor values) plus "resume
+  display updates". The 100-byte sensor frame carries per-pin voltage/current/power, totals,
+  average voltage, in/out and two external temperatures, fan duty, the cable's power rating
+  and both fault masks.
+- `bridge/wireview_source.py` picks the reader. `--source auto` (default) opens the COM port
+  directly and falls back to HWiNFO64 shared memory (`hwinfo_wireview.py`, HWiNFO 8.41+ with
+  Shared Memory Support) only while the port is unavailable. `--source serial` / `hwinfo`
+  force one; `--serial-port COM5` overrides auto-detection by USB ID 0483:5740.
+- While the bridge holds the port, HWiNFO's own WireView sensor stops updating; it resumes
+  when the bridge exits.
+- The bridge answers with permissive CORS and also serves `docs/`, so
+  `http://localhost:8765/per-wire/` works without GitHub Pages.
+
+**Which URL in iCUE?** The same pages are hosted at
+<https://jlobue10.github.io/wireview-xeneon-edge/>, but that is an https page reaching into
+`localhost`. Chromium 138+ classifies that as a Local Network Access request and asks for
+permission; an embedded webview may deny it silently and the widget shows "Bridge offline".
+Served from the bridge, page and data share one origin and nothing can block it. iCUE 5.51
+bundles Chromium 130, which predates the rule, so the hosted URLs also work today; the
+localhost form is simply future-proof.
 
 ## URL options
 
@@ -71,7 +90,7 @@ WireView Pro II ──USB──▶ HWiNFO64 (shared memory) ──▶ bridge/wir
 | `host` | `http://localhost:8765` | Bridge origin |
 | `wire_limit` | `10.5` | Amps per wire treated as 100 % (per-wire widget) |
 | `total_limit` | `55` | Amps total treated as 100 % (total-current widget) |
-| `cable_w` | `600` | Cable rating in W (total-power widget) |
+| `cable_w` | cable's own rating | Cable rating in W (total-power widget); the WireView reports 600/450/300/150 |
 | `decimals` | `2` | Decimals on the headline numbers |
 | `interval` | `1000` | Poll interval in ms |
 | `accent`, `bg`, `fg` | orange / black / white | Hex colours without `#` |
@@ -90,23 +109,30 @@ The pages size themselves with `vmin` units and were checked at every Xeneon Edg
 
 ```json
 {
-  "ok": true, "hwinfo_running": true, "device_found": true, "age_s": 0.4,
+  "ok": true, "source": "serial", "device_found": true, "poll_time": 1790473743.8, "age_s": 0.0,
+  "device": {"port": "COM5", "fw": 5, "uid": "A100...", "build": "TG-WV-PRO2-FW_20260430_1838"},
   "pins": [{"n": 1, "voltage": 12.04, "current": 2.22, "power": 26.7}, "... 6 entries"],
   "total_current": 12.49, "total_power": 150.4, "avg_voltage": 12.04,
-  "temp_in": 35.5, "temp_out": 35.8,
+  "temp_in": 35.5, "temp_out": 35.8, "temp_ext": [null, null], "vdd": 3.417, "fan_duty": 0,
+  "cable_w": 600,
   "faults": {"temp_chip": false, "temp_sensor": false, "over_current_total": false,
              "over_current_wire": false, "over_power": false, "imbalance": false},
   "faults_logged": {"...": "same keys, latched since last clear"}
 }
 ```
 
-`GET /api/health` returns `{"ok": true}`. Options: `--port`, `--bind`, `--no-static`.
+When there is no reading, `ok` is false and `status` / `hint` say why (for example
+`"COM port busy"` / `"close the WireView app (and HWiNFO)"`). `GET /api/health` returns
+`{"ok": true}`. Options: `--port`, `--bind`, `--no-static`, `--source`, `--serial-port`.
 
 ## Companion project
 
 [wireview-nexus](https://github.com/jlobue10/wireview-nexus) shows the same readings on a
-Corsair iCUE Nexus, which cannot display web content, by driving the panel directly.
+Corsair iCUE Nexus, which cannot display web content, by driving the panel directly. When
+both run on one PC the Nexus daemon reads from this bridge, so the two never fight over the
+COM port. `wireview_serial.py`, `wireview_source.py` and `hwinfo_wireview.py` are identical
+in both repositories.
 
 ## License
 
-MIT
+MIT. WireView serial protocol details from wireview-pro-ii and wireview-hwmon (MIT).

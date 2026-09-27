@@ -41,10 +41,9 @@
 
   <h2>Setup</h2>
   <ol>
-    <li>Install <a href="https://www.hwinfo.com/download/">HWiNFO64</a> 8.41 or newer. It reads the WireView Pro II directly, so close the Thermal Grizzly WireView app (the two cannot share the USB port).</li>
-    <li>In HWiNFO: Sensors-only mode, and Settings → Main Settings → <b>Shared Memory Support</b> on. The free version stops the feed after 12 hours per session; HWiNFO Pro removes that cap.</li>
-    <li>Run the bridge from this repository: <code>python bridge/wireview_bridge.py</code> (Python 3.10+, no packages). It serves JSON at <code>http://localhost:8765/api/wireview</code> and also serves these widgets locally. <code>bridge/install-startup.ps1</code> makes it start at login.</li>
-    <li>In iCUE, open the Xeneon Edge, add an <b>iFrame</b> widget, and paste one of the widget URLs above. Add <code>?wire_limit=10.5&amp;total_limit=55&amp;cable_w=600</code> to match the limits set in the WireView device.</li>
+    <li>Install the bridge with one PowerShell command: <code>powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/jlobue10/wireview-xeneon-edge/main/install.ps1 | iex"</code>. It fetches the files, sets up Python, and starts the bridge at login. It serves JSON at <code>http://localhost:8765/api/wireview</code> and also serves these widgets locally.</li>
+    <li>The bridge reads the WireView directly over its USB serial port (no HWiNFO needed). Close the Thermal Grizzly WireView app and disable its auto-start; only one program can hold the port.</li>
+    <li>In iCUE, open the Xeneon Edge, add an <b>iFrame</b> widget, and paste one of the widget URLs above. Add <code>?wire_limit=10.5&amp;total_limit=55</code> to match the limits set in the WireView device; the cable rating comes from the device itself.</li>
   </ol>
   <p><b>Which URL?</b> The bridge serves an identical copy of these pages at <code>http://localhost:8765/…</code>. Use that in the iFrame widget: page and data share one origin, so nothing can block the fetch. The hosted copy here is an https page reaching into <code>localhost</code>, which recent Chromium builds (Chrome 138+) treat as a Local Network Access request that needs a permission grant; a browser will ask, but an embedded webview may silently deny. iCUE 5.51 ships Chromium 130, which predates the rule, so the hosted URLs should work in its iFrame widget today; if one ever shows "Bridge offline" while the localhost one works, that is why.</p>
 
@@ -54,7 +53,7 @@
     <tr><td><code>host</code></td><td><code>http://localhost:8765</code></td><td>Bridge origin</td></tr>
     <tr><td><code>wire_limit</code></td><td><code>10.5</code></td><td>Amps per wire shown as 100 % (per-wire widget)</td></tr>
     <tr><td><code>total_limit</code></td><td><code>55</code></td><td>Amps total shown as 100 % (total current widget)</td></tr>
-    <tr><td><code>cable_w</code></td><td><code>600</code></td><td>Cable rating in W (total power widget)</td></tr>
+    <tr><td><code>cable_w</code></td><td>cable's own rating</td><td>Cable rating in W (total power widget)</td></tr>
     <tr><td><code>decimals</code></td><td><code>2</code></td><td>Decimals on headline numbers</td></tr>
     <tr><td><code>interval</code></td><td><code>1000</code></td><td>Poll interval in ms</td></tr>
     <tr><td><code>accent</code>, <code>bg</code>, <code>fg</code></td><td>orange / black / white</td><td>Hex colours without <code>#</code></td></tr>

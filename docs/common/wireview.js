@@ -7,7 +7,7 @@
  *   ?host=http://localhost:8765   bridge origin (default shown)
  *   ?wire_limit=10.5              amps per wire that counts as 100 % (TG default limit)
  *   ?total_limit=55               amps total that counts as 100 %
- *   ?cable_w=600                  cable power rating used by the power gauge
+ *   ?cable_w=600                  cable power rating used by the power gauge (default: what the cable reports)
  *   ?interval=1000                poll interval in ms
  *   ?decimals=2                   decimals on the headline numbers
  *   ?accent=f08e33                accent colour (hex, no #)
@@ -24,6 +24,7 @@
     wireLimit: num('wire_limit', 10.5),
     totalLimit: num('total_limit', 55),
     cableW: num('cable_w', 600),
+    cableWSet: q.has('cable_w'),
     interval: Math.max(250, num('interval', 1000)),
     decimals: Math.max(0, Math.min(3, num('decimals', 2))),
     showLabel: q.get('label') !== '0',
@@ -90,10 +91,12 @@
   // Offline / error copy shared by every widget.
   function problemText(d, err) {
     if (err || !d) return { title: 'Bridge offline', hint: cfg.host };
-    if (!d.hwinfo_running) return { title: 'HWiNFO not running', hint: 'start HWiNFO64 with Shared Memory on' };
+    if (d.ok) return null;
+    if (d.status) return { title: d.status, hint: d.hint || '' };
+    // Older bridge without status/hint fields.
+    if (d.hwinfo_running === false) return { title: 'HWiNFO not running', hint: 'start HWiNFO64 with Shared Memory on' };
     if (!d.device_found) return { title: 'WireView not found', hint: 'close the WireView app, restart HWiNFO' };
-    if (!d.ok) return { title: 'No data', hint: d.error || '' };
-    return null;
+    return { title: 'No data', hint: d.error || '' };
   }
 
   window.WireView = { cfg, level, activeFaults, fmt, start, problemText };

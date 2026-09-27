@@ -40,6 +40,11 @@
       return;
     }
     body.classList.remove('problem-on');
+    // Without ?cable_w=, follow the rating the cable itself reports (600/450/300/150 W).
+    if (!cfg.cableWSet && d.cable_w && d.cable_w !== cfg.cableW) {
+      cfg.cableW = d.cable_w;
+      document.getElementById('cap-right').textContent = 'cable ' + cfg.cableW + ' W';
+    }
     const P = d.total_power;
     val.textContent = WV.fmt(P, Math.min(cfg.decimals, 1));
     const t = d.temp_out != null ? d.temp_out : d.temp_in;

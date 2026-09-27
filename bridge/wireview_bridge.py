@@ -2,16 +2,18 @@
 
 The Xeneon Edge widgets (hosted on GitHub Pages or served from this bridge)
 poll ``http://localhost:8765/api/wireview`` once a second. The bridge reads
-HWiNFO shared memory on demand, caches for a short interval, and answers with
-permissive CORS so an https page may fetch it.
+the WireView directly over USB serial (falling back to HWiNFO shared memory),
+caches for a short interval, and answers with permissive CORS so an https
+page may fetch it.
 
 Usage::
 
     python wireview_bridge.py               # port 8765, serves ../docs too
     python wireview_bridge.py --port 9000
     python wireview_bridge.py --no-static   # JSON only
+    python wireview_bridge.py --source hwinfo
 
-Standard library only.
+Requires pyserial for the direct USB path; standard library otherwise.
 """
 
 from __future__ import annotations
@@ -30,7 +32,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from hwinfo_wireview import read_wireview  # noqa: E402
+from wireview_source import SOURCES, read_wireview  # noqa: E402
 
 DEFAULT_PORT = 8765
 CACHE_SECONDS = 0.25
@@ -38,16 +40,26 @@ DOCS_DIR = Path(__file__).resolve().parent.parent / "docs"
 
 
 class _Cache:
+    source = "auto"
+    serial_port: str | None = None
+
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._at = 0.0
         self._data: dict = {}
+        self._last_source: str | None = None
 
     def get(self) -> dict:
         with self._lock:
             now = time.monotonic()
             if now - self._at > CACHE_SECONDS:
-                self._data = read_wireview()
+                self._data = read_wireview(self.source, self.serial_port, bridge_url=None)
+                src = self._data["source"] if self._data["ok"] else f"none ({self._data.get('status')}: {self._data.get('hint')})"
+                if src != self._last_source:
+                    dev = self._data.get("device") or {}
+                    extra = f" on {dev.get('port')} fw v{dev.get('fw')}" if dev else ""
+                    print(f"readings: {src}{extra}", flush=True)
+                    self._last_source = src
                 self._data["served_at"] = time.time()
                 self._at = now
             return self._data
@@ -128,7 +140,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--port", type=int, default=DEFAULT_PORT)
     ap.add_argument("--bind", default="127.0.0.1", help="interface to bind (default localhost only)")
     ap.add_argument("--no-static", action="store_true", help="do not serve the docs/ widgets, JSON only")
+    ap.add_argument("--source", choices=[s for s in SOURCES if s != "bridge"], default="auto", help="serial (direct USB), hwinfo, or auto (default)")
+    ap.add_argument("--serial-port", metavar="COMx", default=None, help="WireView COM port (default: auto-detect)")
     args = ap.parse_args(argv)
+
+    _Cache.source = args.source
+    _Cache.serial_port = args.serial_port
 
     if args.no_static or not DOCS_DIR.is_dir():
         Handler.static_root = None
