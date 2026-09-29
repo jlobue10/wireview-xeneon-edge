@@ -15,6 +15,10 @@ serves the widget pages too. No HWiNFO, no Thermal Grizzly app; nothing leaves t
 and only the widget pages (the bridge's own origin and the GitHub Pages copy) may read the
 JSON from a browser.
 
+The bridge is a single executable, `wireview-bridge.exe`, written in Rust. It needs no runtime
+and no other files: the widget pages are built into it. (Releases up to 1.0.1 were Python; the
+JSON and the bridge authentication are unchanged, so old and new programs work together.)
+
 ## Install
 
 One command, in PowerShell:
@@ -23,10 +27,10 @@ One command, in PowerShell:
 powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/jlobue10/wireview-xeneon-edge/main/install.ps1 | iex"
 ```
 
-It downloads this repository to `%LOCALAPPDATA%\wireview-xeneon-edge`, installs Python 3.12
-with winget if no Python 3.10+ is present, creates a venv with pyserial, registers a per-user
-Scheduled Task named "WireView Bridge" that runs the bridge at logon (no admin rights needed),
-and starts it. Then:
+It downloads `wireview-bridge.exe` from the latest release to
+`%LOCALAPPDATA%\wireview-xeneon-edge`, checks its SHA-256, registers a per-user Scheduled Task
+named "WireView Bridge" that runs the bridge at logon (no admin rights needed), and starts it.
+A Python-based 1.x install in that folder is replaced. Then:
 
 1. **Close the Thermal Grizzly WireView app** and turn off its auto-start. Only one program
    can hold the WireView's USB serial port.
@@ -40,69 +44,76 @@ and starts it. Then:
    Append query options to match your limits, e.g.
    `http://localhost:8765/per-wire/?wire_limit=10.5&total_limit=55`.
 
-Re-running the installer updates the files and restarts the bridge. Remove everything with
-`install.ps1 -Uninstall` (from `%LOCALAPPDATA%\wireview-xeneon-edge`).
+Re-running the installer updates the executable and restarts the bridge. Remove everything with
+`install.ps1 -Uninstall`.
 
-The installer fetches the latest tagged release and prints the archive's SHA-256. If the release
-lookup fails it stops rather than silently installing `main` (`-Ref main` selects the development
-branch on purpose).
+The installer fetches the latest tagged release, prints the executable's SHA-256 and compares it
+with the release's `SHA256SUMS`. If the release lookup fails it stops rather than installing
+something else. That comparison only catches a damaged download, because the list comes from the
+same place as the file.
 
 The one-liner above runs whatever `install.ps1` is on `main` today. To install exactly what you
-reviewed, fetch the bootstrap from the same tag and pass the archive hash from that release's
-notes:
+reviewed, fetch the bootstrap from the same tag and pass the hash from that release's notes:
 
 ```
-powershell -ExecutionPolicy Bypass -c "& ([scriptblock]::Create((irm https://raw.githubusercontent.com/jlobue10/wireview-xeneon-edge/v1.0.1/install.ps1))) -Ref v1.0.1 -Sha256 <hash>"
+powershell -ExecutionPolicy Bypass -c "& ([scriptblock]::Create((irm https://raw.githubusercontent.com/jlobue10/wireview-xeneon-edge/v2.0.0/install.ps1))) -Ref v2.0.0 -Sha256 <hash>"
 ```
 
-Fully verified, with no remote code before the check: download the release zip, compare its
-hash with the release notes, expand it, and run the installer from the extracted folder (it then
-installs in place):
+Fully verified, with no remote code before the check: download `wireview-bridge.exe` and
+`install.ps1` from the release page into one folder, compare the hash with the release notes,
+and run the installer there (it then installs in place):
 
 ```
-Invoke-WebRequest https://github.com/jlobue10/wireview-xeneon-edge/archive/v1.0.1.zip -OutFile wireview-xeneon-edge-v1.0.1.zip
-(Get-FileHash wireview-xeneon-edge-v1.0.1.zip).Hash        # must equal the hash in the release notes
-Expand-Archive wireview-xeneon-edge-v1.0.1.zip -DestinationPath .
-powershell -ExecutionPolicy Bypass -File wireview-xeneon-edge-1.0.1\install.ps1
+(Get-FileHash wireview-bridge.exe).Hash        # must equal the hash in the release notes
+gh attestation verify wireview-bridge.exe --repo jlobue10/wireview-xeneon-edge   # optional: built by this repository's workflow
+powershell -ExecutionPolicy Bypass -File install.ps1
 ```
+
+`-NoStart` registers without starting; `-ExtraArgs '--port 9000'` passes options to the bridge.
 
 <details>
-<summary>Manual setup from a clone</summary>
+<summary>Build from source</summary>
+
+With [Rust](https://rustup.rs) installed:
 
 ```
-python -m venv venv
-venv\Scripts\pip install -r bridge\requirements.txt
-venv\Scripts\python bridge\wireview_bridge.py
-powershell -ExecutionPolicy Bypass -File install.ps1   # venv + run at logon
+cargo build --release -p wireview-bridge
+target\release\wireview-bridge.exe
 ```
 
-The last line does the same steps in place. `-NoStart` registers without starting.
+Copy `install.ps1` next to the executable and run it to register the task in place.
 </details>
 
 ## How it works
 
 ```
-WireView Pro II ──USB serial (COMx, 115200 8N1)──▶ bridge/wireview_bridge.py ──localhost JSON──▶ widget page in iCUE iFrame
+WireView Pro II ──USB serial (COMx, 115200 8N1)──▶ wireview-bridge.exe ──localhost JSON──▶ widget page in iCUE iFrame
 ```
 
-- `bridge/wireview_serial.py` speaks the WireView's serial protocol, as recovered by the Linux
+The code is a Cargo workspace: `crates/wireview-core` is the reader, shared with
+[wireview-nexus](https://github.com/jlobue10/wireview-nexus); `crates/wireview-bridge` is the
+HTTP server.
+
+- `wireview-core/src/serial.rs` speaks the WireView's serial protocol, as recovered by the Linux
   community projects [wireview-pro-ii](https://github.com/Gustav0ar/wireview-pro-ii)
   (`docs/protocol.md`) and [wireview-hwmon](https://github.com/emaspa/wireview-hwmon). Only
   read-only commands are used (vendor data, UID, build info, sensor values) plus "resume
   display updates". The 100-byte sensor frame carries per-pin voltage/current/power, totals,
   average voltage, in/out and two external temperatures, fan duty, the cable's power rating
   and both fault masks.
-- `bridge/wireview_source.py` picks the reader. `--source auto` (default) opens the COM port
-  directly and falls back to HWiNFO64 shared memory (`hwinfo_wireview.py`, HWiNFO 8.41+ with
-  Shared Memory Support) only while the port is unavailable. `--source serial` / `hwinfo`
-  force one; `--serial-port COM5` overrides auto-detection by USB ID 0483:5740.
+- `wireview-core/src/source.rs` picks the reader. `--source auto` (default) opens the COM port
+  directly and falls back to HWiNFO64 shared memory (`hwinfo.rs`, HWiNFO 8.41+ with Shared
+  Memory Support) only while the port is unavailable. `--source serial` / `hwinfo` force one;
+  `--serial-port COM5` overrides auto-detection by USB ID 0483:5740.
 - While the bridge holds the port, HWiNFO's own WireView sensor stops updating; it resumes
   when the bridge exits.
-- The bridge also serves `docs/`, so `http://localhost:8765/per-wire/` works without GitHub
-  Pages. Cross-origin reads of the JSON are allowed only from its own loopback origin and
-  `https://jlobue10.github.io`; add others with `--allow-origin`. Requests whose `Host`
-  header is not a loopback name are refused (DNS rebinding), and the device's hardware UID
-  is never served, so a random website open in your browser cannot read or fingerprint the
+- The bridge also serves the widget pages, so `http://localhost:8765/per-wire/` works without
+  GitHub Pages. They are compiled into the executable from `docs/`, so serving them never
+  touches the file system; `--static-dir <folder>` serves your own copies instead, confined to
+  that folder. Cross-origin reads of the JSON are allowed only from the bridge's own loopback
+  origin and `https://jlobue10.github.io`; add others with `--allow-origin`. Requests whose
+  `Host` header is not a loopback name are refused (DNS rebinding), and the device's hardware
+  UID is never served, so a random website open in your browser cannot read or fingerprint the
   device. Everything else on the PC (the Nexus daemon, `curl`) reads it freely.
 - Programs that share the device through the bridge can check they are talking to the real
   bridge and not to whatever else grabbed the port: append `?nonce=<hex>` and the reply carries
@@ -112,6 +123,8 @@ WireView Pro II ──USB serial (COMx, 115200 8N1)──▶ bridge/wireview_bri
   address is already taken, so a stray listener cannot silently receive half the traffic.
 - Readings older than five seconds are reported as "Stale readings" rather than shown as OK,
   both by the bridge and by the widgets.
+- At most 32 connections are served at once, and a connection that has not sent its request
+  within ten seconds is dropped.
 
 **Which URL in iCUE?** The same pages are hosted at
 <https://jlobue10.github.io/wireview-xeneon-edge/>, but that is an https page reaching into
@@ -161,25 +174,29 @@ The pages size themselves with `vmin` units and were checked at every Xeneon Edg
 
 When there is no reading, `ok` is false and `status` / `hint` say why (for example
 `"COM port busy"` / `"close the WireView app (and HWiNFO)"`). `GET /api/health` returns
-`{"ok": true}`. `served_at` is when the bridge produced the reply; with `?nonce=<hex>` the
+`{"ok":true}`. `served_at` is when the bridge produced the reply; with `?nonce=<hex>` the
 `X-WireView-Auth` header authenticates it (see above). Options: `--port`, `--bind`,
-`--no-static`, `--source`, `--serial-port`, `--allow-origin`, `--version`. `--bind` other than loopback exposes the readings and widgets to that
-network and turns the `Host` check off; leave it at the default unless you mean that.
+`--no-static`, `--static-dir`, `--source`, `--serial-port`, `--allow-origin`, `--version`.
+`--bind` other than loopback exposes the readings and widgets to that network and turns the
+`Host` check off; leave it at the default unless you mean that. Set `WIREVIEW_BRIDGE_LOG=1` to
+log each request.
 
 ## Tests
 
-`python tests/test_hardening.py` runs the regression checks for the access model (CORS, Host,
-HMAC, static containment, worker cap, IPv6 collision, deadlines, freshness, non-finite values,
-HWiNFO block bounds) on Linux or macOS with stubs; no hardware needed.
+`cargo test --workspace` runs the regression checks for the access model (CORS, Host, HMAC,
+static containment, worker cap, IPv6 collision, deadlines, freshness, non-finite values, HWiNFO
+block bounds) on Windows, Linux or macOS with stubs; no hardware needed.
+`cargo run -p wireview-core --example read` prints one reading as JSON.
 
 ## Companion project
 
 [wireview-nexus](https://github.com/jlobue10/wireview-nexus) shows the same readings on a
 Corsair iCUE Nexus, which cannot display web content, by driving the panel directly. When
 both run on one PC the Nexus daemon reads from this bridge, so the two never fight over the
-COM port. `wireview_serial.py`, `wireview_source.py` and `hwinfo_wireview.py` are identical
-in both repositories.
+COM port. It builds against the `wireview-core` crate of this repository.
 
 ## License
 
-MIT. WireView serial protocol details from wireview-pro-ii and wireview-hwmon (MIT).
+MIT. WireView serial protocol details from wireview-pro-ii and wireview-hwmon (MIT). The
+executable includes the Rust crates listed in `Cargo.lock` under their own licenses (MIT,
+Apache-2.0, and MPL-2.0 for `serialport`).

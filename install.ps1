@@ -1,22 +1,22 @@
 # Installer for wireview-xeneon-edge (WireView Pro II -> Xeneon Edge bridge).
 #
-# From anywhere (downloads the latest main branch into %LOCALAPPDATA%\wireview-xeneon-edge):
+# From anywhere (downloads the latest release into %LOCALAPPDATA%\wireview-xeneon-edge):
 #   powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/jlobue10/wireview-xeneon-edge/main/install.ps1 | iex"
 # With options:
 #   powershell -ExecutionPolicy Bypass -c "& ([scriptblock]::Create((irm https://raw.githubusercontent.com/jlobue10/wireview-xeneon-edge/main/install.ps1))) -ExtraArgs '--port 9000'"
 # Pin what gets installed. Fetch the bootstrap from the SAME tag, otherwise main's installer
 # runs before anything is verified:
-#   powershell -ExecutionPolicy Bypass -c "& ([scriptblock]::Create((irm https://raw.githubusercontent.com/jlobue10/wireview-xeneon-edge/v1.0.1/install.ps1))) -Ref v1.0.1 -Sha256 <hash from the release notes>"
-# Fully verified: download the release zip, compare its SHA-256 with the release notes, expand
-# it, and run install.ps1 from the extracted folder (installs in place; -Ref/-Sha256 unused).
-# From a clone (installs in place):
-#   powershell -ExecutionPolicy Bypass -File install.ps1 [-ExtraArgs '--port 9000'] [-NoStart]
+#   powershell -ExecutionPolicy Bypass -c "& ([scriptblock]::Create((irm https://raw.githubusercontent.com/jlobue10/wireview-xeneon-edge/v2.0.0/install.ps1))) -Ref v2.0.0 -Sha256 <hash from the release notes>"
+# Fully verified: download wireview-bridge.exe and install.ps1 from the release, compare the
+# executable's SHA-256 with the release notes, and run install.ps1 from that folder (installs the
+# executable next to it; -Ref/-Sha256 unused).
 # Remove:
 #   powershell -ExecutionPolicy Bypass -File install.ps1 -Uninstall
 #
-# What it does: finds Python 3.10+ (installs it with winget if missing), creates a venv,
-# installs pyserial, registers a per-user Scheduled Task that runs the bridge
-# at logon (no admin rights needed), and starts it. Re-running updates and restarts.
+# What it does: downloads wireview-bridge.exe (one self-contained file, nothing else to install),
+# checks its SHA-256, registers a per-user Scheduled Task that runs the bridge at logon (no admin
+# rights needed), and starts it. Re-running updates and restarts. An older Python-based install in
+# the same folder is replaced.
 param(
     [string]$ExtraArgs = '',
     [string]$Dir = '',
@@ -29,22 +29,43 @@ param(
 $ErrorActionPreference = 'Stop'
 $Repo = 'jlobue10/wireview-xeneon-edge'
 $Name = 'wireview-xeneon-edge'
-$Main = 'bridge/wireview_bridge.py'
+$Exe = 'wireview-bridge.exe'
 $TaskName = 'WireView Bridge'
-$LegacyShortcut = Join-Path ([Environment]::GetFolderPath('Startup')) 'WireView Bridge.lnk'
+$Description = 'Serves Thermal Grizzly WireView Pro II readings to the Xeneon Edge widgets'
+$BaseArgs = ''
+# What the Python releases (1.x) put in the install folder.
+$LegacyMain = 'bridge/wireview_bridge.py'
+$LegacyItems = @('venv', 'bridge', 'docs', 'tests', '.github', '.gitignore', 'LICENSE', 'README.md', 'install.ps1')
+$startup = [Environment]::GetFolderPath('Startup')
+$LegacyShortcut = if ($startup) { Join-Path $startup 'WireView Bridge.lnk' } else { '' }   # older installs used a Startup shortcut
 
 function Say($msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
 
 function Stop-Daemon {
     Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue | Stop-ScheduledTask -ErrorAction SilentlyContinue
-    Get-CimInstance Win32_Process -Filter "Name LIKE 'python%'" |   # python.exe, pythonw.exe, pythonw3.12.exe (Store)
-        Where-Object { $_.CommandLine -like "*$(Join-Path $Dir $Main)*" } |
+    $target = Join-Path $Dir $Exe
+    Get-CimInstance Win32_Process -Filter "Name = '$Exe'" |
+        Where-Object { $_.ExecutablePath -and ($_.ExecutablePath -ieq $target) } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    # A 1.x install runs under python.exe, pythonw.exe or pythonw3.12.exe (Store).
+    Get-CimInstance Win32_Process -Filter "Name LIKE 'python%'" |
+        Where-Object { $_.CommandLine -like "*$(Join-Path $Dir $LegacyMain)*" } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+}
+
+function Remove-Legacy {
+    # Only a folder that really holds the Python release is cleaned, and only the names it shipped.
+    if (-not (Test-Path (Join-Path $Dir $LegacyMain))) { return }
+    Say 'Removing the files of the Python-based 1.x install'
+    foreach ($item in $LegacyItems) {
+        $p = Join-Path $Dir $item
+        if (Test-Path $p) { Remove-Item -Recurse -Force $p -ErrorAction SilentlyContinue }
+    }
 }
 
 # --- where to install -------------------------------------------------------
 $scriptDir = if ($PSCommandPath) { Split-Path -Parent $PSCommandPath } else { '' }
-$inPlace = $scriptDir -and (Test-Path (Join-Path $scriptDir $Main))
+$inPlace = $scriptDir -and (Test-Path (Join-Path $scriptDir $Exe))
 if (-not $Dir) { $Dir = if ($inPlace) { $scriptDir } else { Join-Path $env:LOCALAPPDATA $Name } }
 
 if ($Uninstall) {
@@ -54,106 +75,86 @@ if ($Uninstall) {
         Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
         Say "Removed scheduled task '$TaskName'"
     }
-    if (Test-Path $LegacyShortcut) { Remove-Item $LegacyShortcut }
+    if ($LegacyShortcut -and (Test-Path $LegacyShortcut)) { Remove-Item $LegacyShortcut }
     if (-not $inPlace -and (Test-Path $Dir)) {
-        if (Test-Path (Join-Path $Dir $Main)) { Remove-Item -Recurse -Force $Dir; Say "Removed $Dir" }
-        else { Say "Left $Dir alone: it does not contain $Main" }
+        Remove-Legacy
+        $target = Join-Path $Dir $Exe
+        if (Test-Path $target) { Remove-Item -Force $target; Say "Removed $target" }
+        if (-not (Get-ChildItem -Force $Dir)) { Remove-Item -Force $Dir; Say "Removed $Dir" }
+        else { Say "Left $Dir alone: it holds files this installer did not put there" }
     }
     Say 'Uninstalled.'
     exit 0
 }
 
-# --- get the files ----------------------------------------------------------
+# --- get the executable -----------------------------------------------------
 if ($inPlace -and ($Ref -or $Sha256)) {
-    Say "Installing in place from $scriptDir; -Ref/-Sha256 apply only to downloads (verify the archive you extracted instead)."
+    Say "Installing $Exe from $scriptDir; -Ref/-Sha256 apply only to downloads (verify the file you downloaded instead)."
 }
 if (-not $inPlace) {
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     if (-not $Ref) {
-        # Default to the latest tagged release. Never fall back to main silently: a lookup
-        # failure must not turn a release install into a development-branch install.
+        # Default to the latest tagged release, and stop if it cannot be found: a lookup failure
+        # must not turn into installing something else.
         try { $Ref = (Invoke-RestMethod -UseBasicParsing "https://api.github.com/repos/$Repo/releases/latest").tag_name }
-        catch { throw "Could not look up the latest release of $Repo ($($_.Exception.Message)). Pass -Ref <tag> to choose one, or -Ref main for the development branch." }
-        if (-not $Ref) { throw "GitHub returned no release tag for $Repo. Pass -Ref <tag> or -Ref main." }
+        catch { throw "Could not look up the latest release of $Repo ($($_.Exception.Message)). Pass -Ref <tag> to choose one." }
+        if (-not $Ref) { throw "GitHub returned no release tag for $Repo. Pass -Ref <tag>." }
     }
-    Say "Downloading $Repo@$Ref to $Dir"
+    if ($Ref -notmatch '^[A-Za-z0-9._-]+$') { throw "-Ref '$Ref' is not a release tag." }
+    Say "Downloading $Repo $Ref to $Dir"
     # Fresh private staging directory; nothing predictable is reused between runs.
     $stage = Join-Path $env:TEMP ("$Name-" + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $stage | Out-Null
     try {
-        $zip = Join-Path $stage 'src.zip'
-        Invoke-WebRequest -UseBasicParsing "https://github.com/$Repo/archive/$Ref.zip" -OutFile $zip
-        $hash = (Get-FileHash $zip -Algorithm SHA256).Hash
-        Say "Archive SHA256: $hash"
-        if ($Sha256 -and $hash -ne $Sha256.ToUpper()) { throw "SHA256 mismatch: expected $Sha256, got $hash" }
-        $tmp = Join-Path $stage 'extract'
-        Expand-Archive $zip -DestinationPath $tmp
-        $src = Get-ChildItem $tmp | Select-Object -First 1
+        $base = "https://github.com/$Repo/releases/download/$Ref"
+        $download = Join-Path $stage $Exe
+        try { Invoke-WebRequest -UseBasicParsing "$base/$Exe" -OutFile $download }
+        catch { throw "Release $Ref of $Repo has no $Exe ($($_.Exception.Message)). Releases before 2.0.0 were Python; use their own install.ps1." }
+        $hash = (Get-FileHash $download -Algorithm SHA256).Hash
+        Say "$Exe SHA256: $hash"
+        if ($Sha256) {
+            if ($hash -ne $Sha256.Trim().ToUpper()) { throw "SHA256 mismatch: expected $Sha256, got $hash" }
+        } else {
+            # Without -Sha256 this only catches a damaged download: the list comes from the same
+            # release as the file. Pass -Sha256 from the release notes to check what you reviewed.
+            $sums = Join-Path $stage 'SHA256SUMS'
+            Invoke-WebRequest -UseBasicParsing "$base/SHA256SUMS" -OutFile $sums
+            $line = Get-Content $sums | Where-Object { $_ -match "^([0-9A-Fa-f]{64})\s+\*?$([regex]::Escape($Exe))\s*$" } | Select-Object -First 1
+            if (-not $line) { throw "SHA256SUMS of release $Ref does not list $Exe" }
+            $expected = ($line -split '\s+')[0].ToUpper()
+            if ($hash -ne $expected) { throw "SHA256 mismatch: the release lists $expected, the download is $hash" }
+        }
+        Stop-Daemon
         New-Item -ItemType Directory -Force $Dir | Out-Null
-        # Keep an existing venv; refresh everything else.
-        Get-ChildItem $src.FullName | ForEach-Object { Copy-Item -Recurse -Force $_.FullName $Dir }
+        Remove-Legacy
+        Copy-Item -Force $download (Join-Path $Dir $Exe)
     } finally {
         Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
     }
 }
-Set-Location $Dir
-
-# --- python -----------------------------------------------------------------
-function Find-Python {
-    # Resolve through PATH only; unlike cmd.exe this never picks up a python.exe from the current directory.
-    foreach ($cand in @(@('py', '-3'), @('python'), @('python3'))) {
-        $cmd = Get-Command $cand[0] -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-        if (-not $cmd) { continue }
-        $exe = $cmd.Source
-        $extra = @($cand | Select-Object -Skip 1)
-        try {
-            $v = & $exe @extra -c 'import sys;print(sys.version_info[0]*100+sys.version_info[1])' 2>$null
-            if ($LASTEXITCODE -eq 0 -and [int]$v -ge 310) { return @{ Exe = $exe; Args = $extra } }
-        } catch {}
-    }
-    return $null
-}
-$py = Find-Python
-if (-not $py) {
-    Say 'Python 3.10+ not found; installing with winget'
-    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
-        throw 'winget is not available. Install Python 3.10+ from https://www.python.org/downloads/ (tick "Add to PATH") and run this again.'
-    }
-    winget install -e --id Python.Python.3.12 --accept-package-agreements --accept-source-agreements --silent
-    $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
-    $py = Find-Python
-    if (-not $py) { throw 'Python was installed but is not on PATH yet. Open a new terminal and run this again.' }
-}
-Say "Using Python: $($py.Exe) $($py.Args)"
-
-# --- venv + packages ---------------------------------------------------------
-$venvPy = Join-Path $Dir 'venv\Scripts\python.exe'
-$pythonw = Join-Path $Dir 'venv\Scripts\pythonw.exe'
-if (-not (Test-Path $venvPy)) {
-    Say 'Creating virtual environment'
-    & $py.Exe @($py.Args) -m venv "$Dir\venv"
-    if ($LASTEXITCODE -ne 0) { throw 'venv creation failed' }
-}
-Say 'Installing packages (pyserial)'
-$pipExtra = if ($env:WIREVIEW_PIP_ARGS) { $env:WIREVIEW_PIP_ARGS -split ' ' } else { @() }
-& $venvPy -m pip install --disable-pip-version-check -q @pipExtra -r (Join-Path $Dir 'bridge/requirements.txt')
-if ($LASTEXITCODE -ne 0) { throw 'pip install failed' }
+$exePath = Join-Path $Dir $Exe
+if (-not (Test-Path $exePath)) { throw "$exePath is missing" }
+Unblock-File $exePath -ErrorAction SilentlyContinue
+$version = (& $exePath --version | Out-String).Trim()
+if ($LASTEXITCODE -ne 0) { throw "$exePath does not run (exit code $LASTEXITCODE)" }
+Say "Installed $version"
 
 # --- run at logon (per-user scheduled task) ----------------------------------
-$daemonArgs = '"' + (Join-Path $Dir $Main) + '"'
-if ($ExtraArgs) { $daemonArgs += ' ' + $ExtraArgs }
+$daemonArgs = (@($BaseArgs, $ExtraArgs) | Where-Object { $_ }) -join ' '
 
 Say "Registering scheduled task '$TaskName' (runs at logon)"
 Stop-Daemon
-if (Test-Path $LegacyShortcut) { Remove-Item $LegacyShortcut }   # older installs used a Startup shortcut
-$action = New-ScheduledTaskAction -Execute $pythonw -Argument $daemonArgs -WorkingDirectory $Dir
+if ($LegacyShortcut -and (Test-Path $LegacyShortcut)) { Remove-Item $LegacyShortcut }
+$actionArgs = @{ Execute = $exePath; WorkingDirectory = $Dir }
+if ($daemonArgs) { $actionArgs.Argument = $daemonArgs }
+$action = New-ScheduledTaskAction @actionArgs
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
     -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
 $settings.ExecutionTimeLimit = 'PT0S'   # no 3-day cap; it is a daemon
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal `
-    -Settings $settings -Description 'Serves Thermal Grizzly WireView Pro II readings to the Xeneon Edge widgets' -Force | Out-Null
+    -Settings $settings -Description $Description -Force | Out-Null
 
 if (-not $NoStart) {
     Say 'Starting it now'
@@ -163,7 +164,7 @@ if (-not $NoStart) {
 Write-Host ''
 Say 'Done.'
 Write-Host "  Installed in : $Dir"
-Write-Host "  Runs         : $pythonw $daemonArgs"
+Write-Host "  Runs         : $exePath $daemonArgs"
 Write-Host '  Bridge       : http://localhost:8765/api/wireview'
 Write-Host '  Readings     : straight from the WireView over USB. Close the Thermal Grizzly WireView app'
 Write-Host '                 (and disable its auto-start) so the COM port is free. No HWiNFO needed.'

@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = ["crates/wireview-core", "crates/wireview-bridge"]
+
+[workspace.package]
+version = "2.0.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+repository = "https://github.com/jlobue10/wireview-xeneon-edge"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true

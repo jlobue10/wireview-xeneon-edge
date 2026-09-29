@@ -1,0 +1,4 @@
+# Link the C runtime into the executable, so the released .exe needs no
+# Visual C++ redistributable on the target machine.
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]
