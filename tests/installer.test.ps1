@@ -28,8 +28,13 @@ if ($Child) {
 }
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$name = Split-Path -Leaf $repoRoot
-$exe = if ($name -eq 'wireview-nexus') { 'wireview-nexus.exe' } else { 'wireview-bridge.exe' }
+# The installer under test names the release repository and executable; read them from it so
+# the checks do not depend on what the checkout directory happens to be called.
+$installerText = Get-Content -LiteralPath (Join-Path $repoRoot 'install.ps1') -Raw
+$repo = [regex]::Match($installerText, "(?m)^\`$Repo = '([^']+)'").Groups[1].Value
+$name = [regex]::Match($installerText, "(?m)^\`$Name = '([^']+)'").Groups[1].Value
+$exe = [regex]::Match($installerText, "(?m)^\`$Exe = '([^']+)'").Groups[1].Value
+if (-not $repo -or -not $name -or -not $exe) { throw 'Could not read $Repo / $Name / $Exe from install.ps1.' }
 $binaryName = if ($IsWindows) { $exe } else { $exe.Replace('.exe', '') }
 $binaryPath = Join-Path $repoRoot "target/debug/$binaryName"
 if (-not (Test-Path -LiteralPath $binaryPath)) { throw 'Run cargo test first to build the CLI binary.' }
@@ -63,7 +68,7 @@ try {
     & $engine -NoProfile -File $PSCommandPath -Child -Download -Installer (Join-Path $repoRoot 'install.ps1') -Directory $managed -Binary $binaryPath
     Check ($LASTEXITCODE -eq 0) 'Mocked download install failed'
     $marker = Get-Content -LiteralPath (Join-Path $managed '.wireview-install.json') -Raw | ConvertFrom-Json
-    Check ($marker.repo -eq "jlobue10/$name" -and $marker.exe -eq $exe -and $marker.schema -eq 1) 'Install marker missing or incorrect'
+    Check ($marker.repo -eq $repo -and $marker.exe -eq $exe -and $marker.schema -eq 1) 'Install marker missing or incorrect'
     Set-Content -LiteralPath (Join-Path $managed 'user-notes.txt') -Value 'Keep me.'
     Run-Uninstall $managed
     Check (-not (Test-Path -LiteralPath (Join-Path $managed $exe))) 'Copied installer left the managed executable'

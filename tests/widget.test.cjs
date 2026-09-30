@@ -91,6 +91,16 @@ test('visibility restart aborts the old request and leaves a single poll loop', 
   await w.advance(1000); assert.equal(w.requests.length, 3);
 });
 
+test('a visibility restart forgets failures counted before it', async () => {
+  const w = widget(); w.start(); await w.fail(0);
+  assert.equal(w.updates.length, 0); // one failure is not yet a problem
+  await w.advance(1000); w.visible(); // the second poll is aborted by the restart
+  await w.fail(2);
+  assert.equal(w.updates.length, 0, 'first failure after a restart must not show the overlay');
+  await w.advance(1000); await w.fail(3);
+  assert.equal(w.updates.at(-1).problem.title, 'Bridge offline');
+});
+
 test('repeated start replaces the callback and registers one visibility listener', async () => {
   const w = widget(); w.start(); w.start();
   assert.equal(w.listenerCount(), 1);

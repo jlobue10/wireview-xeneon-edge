@@ -134,6 +134,9 @@
 
   function restart() {
     generation += 1;
+    // A tab coming back is a fresh start: a failure counted while it was
+    // hidden must not turn the first new hiccup into the offline overlay.
+    failures = 0;
     clearTimeout(timer);
     if (controller) controller.abort();
     tick(generation);
@@ -141,7 +144,6 @@
 
   function start(callback) {
     onData = callback;
-    failures = 0;
     clearTimeout(freshnessTimer);
     restart();
   }

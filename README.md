@@ -116,6 +116,9 @@ HTTP server.
   `--serial-port COM5` overrides auto-detection by USB ID 0483:5740.
 - While the bridge holds the port, HWiNFO's own WireView sensor stops updating; it resumes
   when the bridge exits.
+- The HWiNFO reader needs Total Current, Total Power and all six Pin Current values enabled
+  under the WireView sensor; if any is hidden, the widgets show "Incomplete readings" instead
+  of a healthy display with blanks.
 - The bridge also serves the widget pages, so `http://localhost:8765/per-wire/` works without
   GitHub Pages. They are compiled into the executable from `docs/`, so serving them never
   touches the file system; `--static-dir <folder>` serves your own copies instead, confined to
