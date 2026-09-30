@@ -191,7 +191,9 @@ log each request.
 
 `cargo test --workspace` runs the regression checks for the access model (CORS, Host, HMAC,
 static containment, worker cap, IPv6 collision, deadlines, freshness, non-finite values, HWiNFO
-block bounds) on Windows, Linux or macOS with stubs; no hardware needed.
+block bounds) on Windows, Linux or macOS with stubs; no hardware needed. The tests run one at a
+time (`.cargo/config.toml`), because some antivirus drivers stall a parallel run; the bridge
+itself is not affected.
 `cargo run -p wireview-core --example read` prints one reading as JSON.
 
 ## Companion project

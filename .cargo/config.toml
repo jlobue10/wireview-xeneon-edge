@@ -2,3 +2,11 @@
 # Visual C++ redistributable on the target machine.
 [target.'cfg(all(windows, target_env = "msvc"))']
 rustflags = ["-C", "target-feature=+crt-static"]
+
+# Run the tests one at a time. The hardening tests start a bridge each, and
+# with many listeners and clients in one new process some antivirus kernel
+# drivers (seen with Norton's nllArPot.sys, the Avast/AVG aswArPot) hold
+# socket calls for 10 s at a time, so a parallel run fails at random.
+# `cargo test -- --test-threads=N` or RUST_TEST_THREADS overrides this.
+[env]
+RUST_TEST_THREADS = "1"
