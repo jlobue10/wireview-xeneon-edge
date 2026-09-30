@@ -1,0 +1,101 @@
+# Isolated installer regression checks. Administrative APIs and downloads are
+# mocked; only --version is executed, using the binary already built by Cargo.
+param([switch]$Child, [string]$Installer, [string]$Directory, [string]$Binary, [switch]$Download, [switch]$ExplicitDir)
+$ErrorActionPreference = 'Stop'
+if ($Child) {
+    function Get-ScheduledTask { return $null }
+    function Get-CimInstance { return @() }
+    function Stop-ScheduledTask {}
+    function Stop-Process {}
+    function Unregister-ScheduledTask {}
+    function New-ScheduledTaskAction {}
+    function New-ScheduledTaskTrigger {}
+    function New-ScheduledTaskPrincipal {}
+    function New-ScheduledTaskSettingsSet { return [pscustomobject]@{ ExecutionTimeLimit = '' } }
+    function Register-ScheduledTask {}
+    function Unblock-File {}
+    function Invoke-WebRequest {
+        param([switch]$UseBasicParsing, [Parameter(Position=0)][string]$Uri, [string]$OutFile)
+        if ($Uri.EndsWith('/install.ps1')) { Copy-Item -LiteralPath $Installer -Destination $OutFile }
+        else { Copy-Item -LiteralPath $Binary -Destination $OutFile }
+    }
+    if ($Download) {
+        $hash = (Get-FileHash -LiteralPath $Binary -Algorithm SHA256).Hash
+        & $Installer -Dir $Directory -Ref v2.0.0 -Sha256 $hash -NoStart
+    } elseif ($ExplicitDir) { & $Installer -Uninstall -Dir $Directory }
+    else { & $Installer -Uninstall }
+    exit 0
+}
+
+$repoRoot = Split-Path -Parent $PSScriptRoot
+$name = Split-Path -Leaf $repoRoot
+$exe = if ($name -eq 'wireview-nexus') { 'wireview-nexus.exe' } else { 'wireview-bridge.exe' }
+$binaryName = if ($IsWindows) { $exe } else { $exe.Replace('.exe', '') }
+$binaryPath = Join-Path $repoRoot "target/debug/$binaryName"
+if (-not (Test-Path -LiteralPath $binaryPath)) { throw 'Run cargo test first to build the CLI binary.' }
+$engine = (Get-Process -Id $PID).Path
+$root = Join-Path ([IO.Path]::GetTempPath()) ('wireview-installer-test-' + [guid]::NewGuid().ToString('N'))
+$oldLocal = $env:LOCALAPPDATA
+$oldTemp = $env:TEMP
+New-Item -ItemType Directory -Path $root | Out-Null
+$env:LOCALAPPDATA = Join-Path $root 'local'
+$env:TEMP = $root
+
+function Fixture([string]$path, [string]$markerRepo = '') {
+    New-Item -ItemType Directory -Path $path -Force | Out-Null
+    Copy-Item -LiteralPath (Join-Path $repoRoot 'install.ps1') -Destination (Join-Path $path 'install.ps1')
+    Set-Content -LiteralPath (Join-Path $path $exe) -Value 'Fixture only; never executed.'
+    Set-Content -LiteralPath (Join-Path $path 'user-notes.txt') -Value 'Keep me.'
+    if ($markerRepo) {
+        @{ schema = 1; repo = $markerRepo; exe = $exe } | ConvertTo-Json -Compress |
+            Set-Content -LiteralPath (Join-Path $path '.wireview-install.json')
+    }
+}
+function Run-Uninstall([string]$path, [switch]$Explicit) {
+    $params = @('-NoProfile', '-File', $PSCommandPath, '-Child', '-Installer', (Join-Path $path 'install.ps1'), '-Directory', $path)
+    if ($Explicit) { $params += '-ExplicitDir' }
+    & $engine @params
+    if ($LASTEXITCODE -ne 0) { throw "Uninstall failed for $path" }
+}
+function Check([bool]$condition, [string]$message) { if (-not $condition) { throw $message } }
+try {
+    $managed = Join-Path $root 'downloaded-custom'
+    & $engine -NoProfile -File $PSCommandPath -Child -Download -Installer (Join-Path $repoRoot 'install.ps1') -Directory $managed -Binary $binaryPath
+    Check ($LASTEXITCODE -eq 0) 'Mocked download install failed'
+    $marker = Get-Content -LiteralPath (Join-Path $managed '.wireview-install.json') -Raw | ConvertFrom-Json
+    Check ($marker.repo -eq "jlobue10/$name" -and $marker.exe -eq $exe -and $marker.schema -eq 1) 'Install marker missing or incorrect'
+    Set-Content -LiteralPath (Join-Path $managed 'user-notes.txt') -Value 'Keep me.'
+    Run-Uninstall $managed
+    Check (-not (Test-Path -LiteralPath (Join-Path $managed $exe))) 'Copied installer left the managed executable'
+    Check (-not (Test-Path -LiteralPath (Join-Path $managed 'install.ps1'))) 'Managed installer was not removed'
+    Check (-not (Test-Path -LiteralPath (Join-Path $managed '.wireview-install.json'))) 'Managed marker was not removed'
+    Check (Test-Path -LiteralPath (Join-Path $managed 'user-notes.txt')) 'Uninstall removed user files'
+
+    $legacy = Join-Path $env:LOCALAPPDATA $name
+    Fixture $legacy
+    Run-Uninstall $legacy
+    Check (-not (Test-Path -LiteralPath (Join-Path $legacy $exe))) 'Older default install left its executable'
+    Check (Test-Path -LiteralPath (Join-Path $legacy 'user-notes.txt')) 'Older install removed user files'
+
+    $source = Join-Path $root 'source'
+    Fixture $source
+    Run-Uninstall $source
+    Check (Test-Path -LiteralPath (Join-Path $source $exe)) 'In-place executable should be preserved'
+    Check (Test-Path -LiteralPath (Join-Path $source 'install.ps1')) 'In-place installer should be preserved'
+
+    $custom = Join-Path $root 'older-custom'
+    Fixture $custom
+    Run-Uninstall $custom -Explicit
+    Check (-not (Test-Path -LiteralPath (Join-Path $custom $exe))) 'Explicit custom uninstall left its executable'
+    Check (Test-Path -LiteralPath (Join-Path $custom 'user-notes.txt')) 'Explicit custom uninstall removed user files'
+
+    $foreign = Join-Path $root 'foreign-marker'
+    Fixture $foreign 'someone/another-repo'
+    Run-Uninstall $foreign
+    Check (Test-Path -LiteralPath (Join-Path $foreign $exe)) 'Foreign marker should not authorise deletion'
+    Write-Host 'PASS: managed download, copied installer, older default/custom install, source files and user files.'
+} finally {
+    $env:LOCALAPPDATA = $oldLocal
+    $env:TEMP = $oldTemp
+    Remove-Item -LiteralPath $root -Recurse -Force
+}

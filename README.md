@@ -46,7 +46,10 @@ A Python-based 1.x install in that folder is replaced. Then:
 
 Re-running the installer updates the executable and restarts the bridge. It leaves a copy of
 itself next to the executable, so `%LOCALAPPDATA%\wireview-xeneon-edge\install.ps1 -Uninstall`
-removes everything.
+removes the executable and installer while preserving any files you added.
+
+For an older custom install without an ownership marker, pass `-Uninstall -Dir <install folder>`.
+In-place source or manually downloaded folders keep their files when no `-Dir` is given.
 
 The executable is not code-signed, so SmartScreen or an antivirus may flag it as unknown on
 first run; some products (Norton, for one) quarantine it outright. Check the SHA-256 and the
@@ -144,12 +147,12 @@ localhost form is simply future-proof.
 
 | Option | Default | Meaning |
 |---|---|---|
-| `host` | `http://localhost:8765` | Bridge origin |
+| `host` | Current origin for local pages; `http://localhost:8765` for hosted pages | Bridge origin |
 | `wire_limit` | `10.5` | Amps per wire treated as 100 % (per-wire widget) |
 | `total_limit` | `55` | Amps total treated as 100 % (total-current widget) |
 | `cable_w` | cable's own rating | Cable rating in W (total-power widget); the WireView reports 600/450/300/150 |
 | `decimals` | `2` | Decimals on the headline numbers |
-| `interval` | `1000` | Poll interval in ms |
+| `interval` | `1000` | Poll interval in ms, clamped to 250–60000; stale detection runs independently |
 | `accent`, `bg`, `fg` | orange / black / white | Hex colours without `#` |
 | `label=0` | | Hide the caption line |
 
@@ -208,3 +211,9 @@ COM port. It builds against the `wireview-core` crate of this repository.
 MIT. WireView serial protocol details from wireview-pro-ii and wireview-hwmon (MIT). The
 executable includes the Rust crates listed in `Cargo.lock` under their own licenses (MIT,
 Apache-2.0, and MPL-2.0 for `serialport`).
+
+`node --test tests/widget.test.cjs` checks widget polling, stale detection and custom ports.
+After `cargo test`, `pwsh -NoProfile -File tests/installer.test.ps1` checks installation and
+uninstallation in temporary directories with Windows administration and downloads mocked.
+
+Audit findings and the remaining hardware checks are recorded in [AUDIT-2026-09-30.md](AUDIT-2026-09-30.md).

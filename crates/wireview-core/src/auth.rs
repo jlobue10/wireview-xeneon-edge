@@ -7,7 +7,7 @@
 //! the new implementation.
 
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::SystemTime;
@@ -75,8 +75,14 @@ impl SecretStore {
                         return Some(secret.clone());
                     }
                 }
-                let data = fs::read(&self.path).ok()?;
-                let data = data.trim_ascii().to_vec();
+                let data = match fs::read(&self.path) {
+                    Ok(data) => data.trim_ascii().to_vec(),
+                    // Windows byte-range locks can reject this optimistic
+                    // read while another creator still holds the file. A
+                    // creator must wait on the same lock and recheck below.
+                    Err(_) if create => Vec::new(),
+                    Err(_) => return None,
+                };
                 if data.len() >= MIN_SECRET_LEN {
                     *cache = Some((mtime, data.clone()));
                     return Some(data);
@@ -92,27 +98,40 @@ impl SecretStore {
             }
             Err(_) => return None,
         }
-        let data = self.write_new().ok()?;
+        let data = self.load_or_create().ok()?;
         let mtime = fs::metadata(&self.path).and_then(|m| m.modified()).ok()?;
         *cache = Some((mtime, data.clone()));
         Some(data)
     }
 
-    fn write_new(&self) -> std::io::Result<Vec<u8>> {
+    fn load_or_create(&self) -> std::io::Result<Vec<u8>> {
         if let Some(dir) = self.path.parent() {
             fs::create_dir_all(dir)?;
         }
-        let mut raw = [0u8; 32];
-        getrandom::fill(&mut raw).map_err(std::io::Error::other)?;
-        let data = hex(&raw).into_bytes();
         let mut opts = fs::OpenOptions::new();
-        opts.write(true).create(true).truncate(true);
+        // Lock the file before checking or replacing its contents. Independent
+        // bridge processes must reuse the winning key, not overwrite it after
+        // another process has already cached it. The OS releases the lock on
+        // close (including a crash), so there is no stale lock-file to recover.
+        opts.read(true).write(true).create(true).truncate(false);
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
             opts.mode(0o600);
         }
         let mut f = opts.open(&self.path)?;
+        fs4::FileExt::lock(&f)?;
+        let mut existing = Vec::new();
+        f.read_to_end(&mut existing)?;
+        let existing = existing.trim_ascii();
+        if existing.len() >= MIN_SECRET_LEN {
+            return Ok(existing.to_vec());
+        }
+        let mut raw = [0u8; 32];
+        getrandom::fill(&mut raw).map_err(std::io::Error::other)?;
+        let data = hex(&raw).into_bytes();
+        f.seek(SeekFrom::Start(0))?;
+        f.set_len(0)?;
         f.write_all(&data)?;
         Ok(data)
     }
@@ -223,5 +242,37 @@ mod tests {
         assert_eq!(fresh.get(false), None);
         assert_eq!(fresh.get(true).map(|s| s.len()), Some(64));
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn independent_creators_share_one_key_even_when_repairing_a_short_file() {
+        use std::sync::{Arc, Barrier};
+        for repair in [false, true] {
+            let dir = std::env::temp_dir().join(format!("wireview-auth-race-{}", new_nonce().unwrap()));
+            fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("bridge.secret");
+            if repair {
+                fs::write(&path, b"short").unwrap();
+            }
+            let barrier = Arc::new(Barrier::new(16));
+            let workers: Vec<_> = (0..16)
+                .map(|_| {
+                    let path = path.clone();
+                    let barrier = Arc::clone(&barrier);
+                    std::thread::spawn(move || {
+                        let store = SecretStore::at(path);
+                        barrier.wait();
+                        let key = store.get(true).expect("shared key");
+                        assert_eq!(store.get(false), Some(key.clone()));
+                        key
+                    })
+                })
+                .collect();
+            let keys: Vec<_> = workers.into_iter().map(|w| w.join().unwrap()).collect();
+            let disk = fs::read(&path).unwrap();
+            assert_eq!(disk.len(), 64);
+            assert!(keys.iter().all(|key| key == &disk));
+            fs::remove_dir_all(dir).unwrap();
+        }
     }
 }

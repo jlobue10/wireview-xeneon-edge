@@ -418,12 +418,7 @@ pub fn shape_bridge(data: &Value) -> Readings {
             build: text(dev.get("build")),
         });
     }
-    let complete = out.total_current.is_some()
-        && out.total_power.is_some()
-        && out.poll_time.is_some()
-        && out.pins.len() == PIN_COUNT
-        && out.pins.iter().all(|p| p.current.is_some());
-    if out.ok && !complete {
+    if out.ok && !out.is_complete() {
         out.set_problem("Bad bridge reply", "readings incomplete");
     }
     out
