@@ -592,7 +592,7 @@ checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
 
 [[package]]
 name = "wireview-bridge"
-version = "2.1.0"
+version = "2.1.1"
 dependencies = [
  "clap",
  "serde_json",
@@ -603,7 +603,7 @@ dependencies = [
 
 [[package]]
 name = "wireview-core"
-version = "2.1.0"
+version = "2.1.1"
 dependencies = [
  "fs4",
  "getrandom",
