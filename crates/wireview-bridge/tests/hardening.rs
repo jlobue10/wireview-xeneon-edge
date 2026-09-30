@@ -1,7 +1,7 @@
 //! Regression checks for the bridge's access model.
 //!
 //! The cases mirror the findings of the 2026-09-26 audits (WV-02..WV-06 and
-//! the freshness notes) that `tests/test_hardening.py` covered for the Python
+//! the freshness notes) that the 1.x Python test suite covered for the Python
 //! bridge; the parser and shaping cases (A*, B*) live next to the code in
 //! wireview-core. No hardware is touched: HWiNFO is replaced by a stub.
 
