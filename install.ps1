@@ -66,7 +66,22 @@ function Remove-Legacy {
 # --- where to install -------------------------------------------------------
 $scriptDir = if ($PSCommandPath) { Split-Path -Parent $PSCommandPath } else { '' }
 $inPlace = $scriptDir -and (Test-Path (Join-Path $scriptDir $Exe))
-if (-not $Dir) { $Dir = if ($inPlace) { $scriptDir } else { Join-Path $env:LOCALAPPDATA $Name } }
+$explicitDir = [bool]$Dir
+$defaultDir = Join-Path $env:LOCALAPPDATA $Name
+if (-not $Dir) { $Dir = if ($inPlace) { $scriptDir } else { $defaultDir } }
+$markerPath = Join-Path $Dir '.wireview-install.json'
+$managedInstall = $false
+if (Test-Path -LiteralPath $markerPath) {
+    try {
+        $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json
+        $managedInstall = $marker.schema -eq 1 -and $marker.repo -eq $Repo -and $marker.exe -eq $Exe
+    } catch { Say 'Could not read the install marker; preserving unverified files.' }
+}
+# Older automatic installs have no marker. Recognise their default directory;
+# -Dir explicitly selects an older custom install for removal. In-place source
+# or manually downloaded folders otherwise keep their files.
+$atDefault = [IO.Path]::GetFullPath($Dir).TrimEnd([char[]]'\/') -ieq [IO.Path]::GetFullPath($defaultDir).TrimEnd([char[]]'\/')
+$managedInstall = $managedInstall -or $atDefault -or $explicitDir
 
 if ($Uninstall) {
     Say "Stopping $Name"
@@ -76,11 +91,15 @@ if ($Uninstall) {
         Say "Removed scheduled task '$TaskName'"
     }
     if ($LegacyShortcut -and (Test-Path $LegacyShortcut)) { Remove-Item $LegacyShortcut }
-    if (-not $inPlace -and (Test-Path $Dir)) {
+    if ($managedInstall -and (Test-Path -LiteralPath $Dir)) {
         Remove-Legacy
         $target = Join-Path $Dir $Exe
-        if (Test-Path $target) { Remove-Item -Force $target; Say "Removed $target" }
-        if (-not (Get-ChildItem -Force $Dir)) { Remove-Item -Force $Dir; Say "Removed $Dir" }
+        if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Force; Say "Removed $target" }
+        foreach ($owned in @('install.ps1', '.wireview-install.json')) {
+            $item = Join-Path $Dir $owned
+            if (Test-Path -LiteralPath $item) { Remove-Item -LiteralPath $item -Force }
+        }
+        if (-not (Get-ChildItem -Force $Dir)) { Remove-Item -LiteralPath $Dir -Force; Say "Removed $Dir" }
         else { Say "Left $Dir alone: it holds files this installer did not put there" }
     }
     Say 'Uninstalled.'
@@ -128,6 +147,8 @@ if (-not $inPlace) {
         New-Item -ItemType Directory -Force $Dir | Out-Null
         Remove-Legacy
         Copy-Item -Force $download (Join-Path $Dir $Exe)
+        @{ schema = 1; repo = $Repo; exe = $Exe } | ConvertTo-Json -Compress |
+            Set-Content -LiteralPath $markerPath -Encoding UTF8
         # Keep that release's installer next to the executable, so `install.ps1 -Uninstall`
         # works from the install folder later. Not security-relevant, so a failure is only noted.
         $script = Join-Path $stage 'install.ps1'

@@ -398,6 +398,38 @@ fn a_trickling_request_cannot_hold_a_worker() {
 }
 
 #[test]
+fn a_slow_response_reader_cannot_restart_the_worker_deadline() {
+    use socket2::{Domain, Protocol, Socket, Type};
+
+    let root = temp("slow-reader");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("large.bin"), vec![0u8; 8 * 1024 * 1024]).unwrap();
+    let b = bridge_with(|c| {
+        c.request_timeout = Duration::from_millis(200);
+        c.statics = Statics::Dir(root.clone());
+    });
+    let sock = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP)).unwrap();
+    sock.set_recv_buffer_size(8192).unwrap();
+    sock.connect(&SocketAddr::from(([127, 0, 0, 1], b.port())).into()).unwrap();
+    let mut stream: TcpStream = sock.into();
+    stream.set_read_timeout(Some(Duration::from_millis(100))).unwrap();
+    stream
+        .write_all(format!("GET /large.bin HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n\r\n", b.port()).as_bytes())
+        .unwrap();
+    wait_for("slow reader to occupy a worker", Duration::from_secs(1), || b.workers() == 1);
+    let started = Instant::now();
+    let mut bytes = [0u8; 8192];
+    while b.workers() != 0 && started.elapsed() < Duration::from_secs(1) {
+        let _ = stream.read(&mut bytes);
+        std::thread::sleep(Duration::from_millis(40));
+    }
+    assert_eq!(b.workers(), 0, "slow reader held a worker past the absolute deadline");
+    drop(stream);
+    b.shutdown();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn c12_listens_on_both_loopback_families() {
     let b = bridge();
     let addrs = b.addrs();

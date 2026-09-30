@@ -128,6 +128,15 @@ pub struct Readings {
 }
 
 impl Readings {
+    /// Minimum fields needed to present the shared monitoring layouts as healthy.
+    pub(crate) fn is_complete(&self) -> bool {
+        self.total_current.is_some()
+            && self.total_power.is_some()
+            && self.poll_time.is_some()
+            && self.pins.len() == PIN_COUNT
+            && self.pins.iter().all(|p| p.current.is_some())
+    }
+
     /// No readings yet, from `source`.
     pub fn blank(source: &str) -> Self {
         Readings {

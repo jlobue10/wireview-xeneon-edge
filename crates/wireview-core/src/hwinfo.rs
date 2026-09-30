@@ -341,7 +341,13 @@ fn shape(sm: Result<SharedMemory, HwinfoUnavailable>, now: f64) -> Readings {
     if flags.len() >= 12 {
         out.faults_logged = Faults::from_flags(&flags[6..12]);
     }
-    out.ok = out.total_current.is_some();
+    out.ok = out.is_complete();
+    if !out.ok {
+        out.set_problem(
+            "Incomplete readings",
+            "enable total current, total power and all six pin currents in HWiNFO",
+        );
+    }
     out
 }
 
@@ -499,6 +505,31 @@ mod tests {
         let buf = wireview_block(&[(5, 1, "Total Current", f64::NAN)]);
         let out = shape(parse(&buf, buf.len()).0, 1_790_000_000.0);
         assert!(!out.ok && out.device_found && out.total_current.is_none());
+    }
+
+    #[test]
+    fn every_required_hwinfo_metric_must_be_present_and_finite() {
+        let mut rows = vec![(5, 1, "Total Current".to_string(), 12.5), (6, 1, "Total Power".to_string(), 150.0)];
+        for n in 1..=6 {
+            rows.push((5, 1, format!("Pin {n} Current"), 2.0));
+        }
+        for missing in 0..rows.len() {
+            for non_finite in [false, true] {
+                let mut partial = rows.clone();
+                if non_finite {
+                    partial[missing].3 = f64::NAN;
+                } else {
+                    partial.remove(missing);
+                }
+                let partial: Vec<_> = partial.iter().map(|(a, b, c, d)| (*a, *b, c.as_str(), *d)).collect();
+                let buf = wireview_block(&partial);
+                let direct = shape(parse(&buf, buf.len()).0, 1_790_000_000.0);
+                assert!(!direct.ok && direct.hwinfo_running && direct.device_found);
+                assert_eq!(direct.status.as_deref(), Some("Incomplete readings"));
+                let bridged = crate::source::shape_bridge(&serde_json::to_value(&direct).unwrap());
+                assert!(!bridged.ok);
+            }
+        }
     }
 
     #[test]

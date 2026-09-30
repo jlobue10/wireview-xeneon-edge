@@ -342,8 +342,8 @@ fn accept_loop(listener: TcpListener, state: Arc<State>) {
 }
 
 fn serve(state: &State, mut stream: TcpStream) {
+    let deadline = Instant::now() + state.request_timeout;
     let _ = stream.set_nodelay(true);
-    let _ = stream.set_write_timeout(Some(state.request_timeout));
     let (line, response) = match read_request(&mut stream, state.request_timeout) {
         Ok(req) => {
             let line = format!("{} {}", req.method, req.path);
@@ -360,7 +360,7 @@ fn serve(state: &State, mut stream: TcpStream) {
         let peer = stream.peer_addr().map_or("?".to_string(), |a| a.to_string());
         eprintln!("{peer} \"{line}\" {}", response.status);
     }
-    let _ = response.write_to(&mut stream, &format!("WireViewBridge/{VERSION}"));
+    let _ = response.write_to(&mut stream, &format!("WireViewBridge/{VERSION}"), deadline);
 }
 
 /// The request's Origin, normalised; `Err` when it was sent twice.

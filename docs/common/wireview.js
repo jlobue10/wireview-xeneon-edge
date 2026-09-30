@@ -4,7 +4,7 @@
  * the page. Configuration comes from the page URL's query string so one hosted
  * page serves every setup:
  *
- *   ?host=http://localhost:8765   bridge origin (default shown)
+ *   ?host=http://localhost:8765   bridge origin (local pages use their own origin)
  *   ?wire_limit=10.5              amps per wire that counts as 100 % (TG default limit)
  *   ?total_limit=55               amps total that counts as 100 %
  *   ?cable_w=600                  cable power rating used by the power gauge (default: what the cable reports)
@@ -20,14 +20,15 @@
   const pos = (k, d) => { const v = num(k, d); return v > 0 ? v : d; };   // limits must be positive
   const STALE_S = 5, SERVED_STALE_S = 10;
   const hex = (k) => { const v = q.get(k); return v && /^[0-9a-fA-F]{3,8}$/.test(v) ? '#' + v : null; };
+  const localPage = /^https?:$/.test(location.protocol) && ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
 
   const cfg = {
-    host: (q.get('host') || 'http://localhost:8765').replace(/\/+$/, ''),
+    host: (q.get('host') || (localPage ? location.origin : 'http://localhost:8765')).replace(/\/+$/, ''),
     wireLimit: pos('wire_limit', 10.5),
     totalLimit: pos('total_limit', 55),
     cableW: pos('cable_w', 600),
     cableWSet: q.has('cable_w'),
-    interval: Math.max(250, num('interval', 1000)),
+    interval: Math.min(60000, Math.max(250, num('interval', 1000))),
     decimals: Math.max(0, Math.min(3, num('decimals', 2))),
     showLabel: q.get('label') !== '0',
     accent: hex('accent'), bg: hex('bg'), fg: hex('fg'),
@@ -65,30 +66,88 @@
 
   let failures = 0;
   let timer = null;
-  async function tick(onData) {
+  let freshnessTimer = null;
+  let controller = null;
+  let generation = 0;
+  let onData = null;
+  const received = new WeakMap();
+
+  function elapsed(d) {
+    const at = received.get(d);
+    return at ? Math.max(0, (performance.now() - at.time) / 1000) : 0;
+  }
+
+  function ages(d) {
+    const since = elapsed(d), at = received.get(d);
+    const served = at ? at.served + since : (Number.isFinite(d.served_at) ? Date.now() / 1000 - d.served_at : 0);
+    // age_s is measured when the reply is produced; time spent in transit
+    // also ages the source sample before it reaches the widget.
+    const source = (Number.isFinite(d.age_s) ? Math.max(0, d.age_s) : 0) + since + Math.max(0, at ? at.served : served);
+    return { source, served };
+  }
+
+  function watchFreshness(d) {
+    clearTimeout(freshnessTimer);
+    if (!d || !d.ok) return;
+    const age = ages(d);
+    const left = Math.min(STALE_S - age.source, SERVED_STALE_S - age.served);
+    if (left < 0) return; // The response callback already shows it as stale.
+    freshnessTimer = setTimeout(() => {
+      // Runs independently of polling, including during a stalled fetch or
+      // a long polling interval. Receipt time is monotonic, so clock changes
+      // cannot keep a frozen reading healthy.
+      onData(d, null);
+    }, Math.ceil(left * 1000) + 1);
+  }
+
+  async function tick(epoch) {
     const ctl = new AbortController();
-    const to = setTimeout(() => ctl.abort(), Math.max(800, cfg.interval * 0.9));
+    controller = ctl;
+    const to = setTimeout(() => ctl.abort(), Math.min(5000, Math.max(800, cfg.interval * 0.9)));
     try {
       const r = await fetch(cfg.host + '/api/wireview', { signal: ctl.signal, cache: 'no-store' });
+      if (!r.ok) throw new Error('Bridge HTTP ' + r.status);
       const d = await r.json();
+      if (epoch !== generation) return;
+      if (d && typeof d === 'object') received.set(d, {
+        time: performance.now(),
+        served: Number.isFinite(d.served_at) ? Date.now() / 1000 - d.served_at : 0,
+      });
       failures = 0;
       onData(d, null);
+      watchFreshness(d);
     } catch (e) {
+      if (epoch !== generation) return;
       failures += 1;
-      if (failures >= 2) onData(null, e);
+      if (failures >= 2) {
+        clearTimeout(freshnessTimer);
+        onData(null, e);
+      }
     } finally {
       clearTimeout(to);
-      timer = setTimeout(() => tick(onData), cfg.interval);
+      if (epoch === generation) {
+        controller = null;
+        timer = setTimeout(() => tick(epoch), cfg.interval);
+      }
     }
   }
 
-  function start(onData) {
-    if (timer) clearTimeout(timer);
-    tick(onData);
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') { clearTimeout(timer); tick(onData); }
-    });
+  function restart() {
+    generation += 1;
+    clearTimeout(timer);
+    if (controller) controller.abort();
+    tick(generation);
   }
+
+  function start(callback) {
+    onData = callback;
+    failures = 0;
+    clearTimeout(freshnessTimer);
+    restart();
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (onData && document.visibilityState === 'visible') restart();
+  });
 
   // Offline / error copy shared by every widget.
   function problemText(d, err) {
@@ -96,9 +155,9 @@
     if (d.ok) {
       // Never show old numbers as healthy: the reading itself must be fresh
       // and the bridge must still be producing replies.
-      const now = Date.now() / 1000;
-      if (typeof d.age_s === 'number' && d.age_s > STALE_S) return { title: 'Stale readings', hint: 'source stopped updating' };
-      if (typeof d.served_at === 'number' && now - d.served_at > SERVED_STALE_S) return { title: 'Stale readings', hint: 'bridge stopped updating' };
+      const age = ages(d);
+      if (age.served > SERVED_STALE_S) return { title: 'Stale readings', hint: 'bridge stopped updating' };
+      if (age.source > STALE_S) return { title: 'Stale readings', hint: 'source stopped updating' };
       return null;
     }
     if (d.status) return { title: d.status, hint: d.hint || '' };

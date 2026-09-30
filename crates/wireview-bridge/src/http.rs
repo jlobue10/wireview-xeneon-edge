@@ -188,7 +188,8 @@ impl Response {
         self
     }
 
-    pub fn write_to(&self, stream: &mut TcpStream, server: &str) -> io::Result<()> {
+    /// Write without copying the body, within the connection's absolute deadline.
+    pub fn write_to(&self, stream: &mut TcpStream, server: &str, deadline: Instant) -> io::Result<()> {
         let mut out = format!(
             "HTTP/1.1 {} {}\r\nServer: {server}\r\nDate: {}\r\nConnection: close\r\n",
             self.status,
@@ -205,13 +206,30 @@ impl Response {
             out += &format!("Content-Length: {}\r\n", self.body.len());
         }
         out += "\r\n";
-        let mut bytes = out.into_bytes();
-        bytes.extend_from_slice(&self.body);
-        stream.write_all(&bytes)?;
-        stream.flush()?;
+        write_until(stream, out.as_bytes(), deadline)?;
+        write_until(stream, &self.body, deadline)?;
         let _ = stream.shutdown(Shutdown::Write);
         Ok(())
     }
+}
+
+fn write_until(stream: &mut TcpStream, mut bytes: &[u8], deadline: Instant) -> io::Result<()> {
+    while !bytes.is_empty() {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "response deadline exceeded"));
+        }
+        stream.set_write_timeout(Some(left))?;
+        // A peer that drains a few bytes at a time cannot restart the entire
+        // timeout on each successful write. Keep each syscall bounded too.
+        match stream.write(&bytes[..bytes.len().min(64 * 1024)]) {
+            Ok(0) => return Err(io::Error::new(io::ErrorKind::WriteZero, "peer stopped reading")),
+            Ok(n) => bytes = &bytes[n..],
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
 }
 
 /// RFC 9110 date, e.g. `Tue, 29 Sep 2026 23:10:00 GMT`.
