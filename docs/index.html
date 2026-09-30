@@ -41,7 +41,7 @@
 
   <h2>Setup</h2>
   <ol>
-    <li>Install the bridge with one PowerShell command: <code>powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/jlobue10/wireview-xeneon-edge/main/install.ps1 | iex"</code>. It fetches the files, sets up Python, and starts the bridge at login. It serves JSON at <code>http://localhost:8765/api/wireview</code> and also serves these widgets locally.</li>
+    <li>Install the bridge with one PowerShell command: <code>powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/jlobue10/wireview-xeneon-edge/main/install.ps1 | iex"</code>. It downloads <code>wireview-bridge.exe</code> from the latest release, checks its SHA-256, and starts the bridge at logon. It serves JSON at <code>http://localhost:8765/api/wireview</code> and also serves these widgets locally.</li>
     <li>The bridge reads the WireView directly over its USB serial port (no HWiNFO needed). Close the Thermal Grizzly WireView app and disable its auto-start; only one program can hold the port.</li>
     <li>In iCUE, open the Xeneon Edge, add an <b>iFrame</b> widget, and paste one of the widget URLs above. Add <code>?wire_limit=10.5&amp;total_limit=55</code> to match the limits set in the WireView device; the cable rating comes from the device itself.</li>
   </ol>

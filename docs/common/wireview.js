@@ -1,6 +1,6 @@
 /* Shared runtime for the WireView Pro II Xeneon Edge widgets.
  *
- * Polls the local bridge (bridge/wireview_bridge.py) and hands each reading to
+ * Polls the local bridge (wireview-bridge.exe) and hands each reading to
  * the page. Configuration comes from the page URL's query string so one hosted
  * page serves every setup:
  *

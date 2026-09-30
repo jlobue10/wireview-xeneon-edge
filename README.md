@@ -47,6 +47,11 @@ A Python-based 1.x install in that folder is replaced. Then:
 Re-running the installer updates the executable and restarts the bridge. Remove everything with
 `install.ps1 -Uninstall`.
 
+The executable is not code-signed, so SmartScreen or an antivirus may flag it as unknown on
+first run; some products (Norton, for one) quarantine it outright. Check the SHA-256 and the
+attestation below, then allow it or add `%LOCALAPPDATA%\wireview-xeneon-edge` to the exclusions.
+Tested on Windows 11 with a WireView Pro II on firmware v5 and iCUE 5.
+
 The installer fetches the latest tagged release, prints the executable's SHA-256 and compares it
 with the release's `SHA256SUMS`. If the release lookup fails it stops rather than installing
 something else. That comparison only catches a damaged download, because the list comes from the
