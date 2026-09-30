@@ -128,6 +128,13 @@ if (-not $inPlace) {
         New-Item -ItemType Directory -Force $Dir | Out-Null
         Remove-Legacy
         Copy-Item -Force $download (Join-Path $Dir $Exe)
+        # Keep that release's installer next to the executable, so `install.ps1 -Uninstall`
+        # works from the install folder later. Not security-relevant, so a failure is only noted.
+        $script = Join-Path $stage 'install.ps1'
+        try {
+            Invoke-WebRequest -UseBasicParsing "$base/install.ps1" -OutFile $script
+            Copy-Item -Force $script (Join-Path $Dir 'install.ps1')
+        } catch { Say "Could not fetch install.ps1 from release $Ref; to uninstall later, run this installer again with -Uninstall." }
     } finally {
         Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
     }

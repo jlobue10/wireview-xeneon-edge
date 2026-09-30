@@ -44,8 +44,9 @@ A Python-based 1.x install in that folder is replaced. Then:
    Append query options to match your limits, e.g.
    `http://localhost:8765/per-wire/?wire_limit=10.5&total_limit=55`.
 
-Re-running the installer updates the executable and restarts the bridge. Remove everything with
-`install.ps1 -Uninstall`.
+Re-running the installer updates the executable and restarts the bridge. It leaves a copy of
+itself next to the executable, so `%LOCALAPPDATA%\wireview-xeneon-edge\install.ps1 -Uninstall`
+removes everything.
 
 The executable is not code-signed, so SmartScreen or an antivirus may flag it as unknown on
 first run; some products (Norton, for one) quarantine it outright. Check the SHA-256 and the
