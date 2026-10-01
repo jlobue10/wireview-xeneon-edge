@@ -65,7 +65,12 @@ function Remove-Legacy {
 
 # --- where to install -------------------------------------------------------
 $scriptDir = if ($PSCommandPath) { Split-Path -Parent $PSCommandPath } else { '' }
-$inPlace = $scriptDir -and (Test-Path (Join-Path $scriptDir $Exe))
+# A neighbouring executable is an in-place install only when that folder
+# is also the requested destination. An explicit different -Dir downloads
+# and verifies the chosen release into that destination.
+$sameDirectory = -not $Dir -or ($scriptDir -and
+    ([IO.Path]::GetFullPath($Dir).TrimEnd([char[]]'\/') -ieq [IO.Path]::GetFullPath($scriptDir).TrimEnd([char[]]'\/')))
+$inPlace = $sameDirectory -and $scriptDir -and (Test-Path (Join-Path $scriptDir $Exe))
 $explicitDir = [bool]$Dir
 $defaultDir = Join-Path $env:LOCALAPPDATA $Name
 if (-not $Dir) { $Dir = if ($inPlace) { $scriptDir } else { $defaultDir } }
