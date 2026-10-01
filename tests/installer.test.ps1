@@ -69,6 +69,21 @@ try {
     Check ($LASTEXITCODE -eq 0) 'Mocked download install failed'
     $marker = Get-Content -LiteralPath (Join-Path $managed '.wireview-install.json') -Raw | ConvertFrom-Json
     Check ($marker.repo -eq $repo -and $marker.exe -eq $exe -and $marker.schema -eq 1) 'Install marker missing or incorrect'
+
+    # A copied installer has a binary beside it. Selecting a different
+    # destination must still download and verify, even if that destination
+    # already holds an older executable.
+    foreach ($existing in @($false, $true)) {
+        $elsewhere = Join-Path $root "explicit-destination-$existing"
+        if ($existing) {
+            New-Item -ItemType Directory -Path $elsewhere | Out-Null
+            Set-Content -LiteralPath (Join-Path $elsewhere $exe) -Value 'Old fixture only; must be replaced before execution.'
+        }
+        & $engine -NoProfile -File $PSCommandPath -Child -Download -Installer (Join-Path $managed 'install.ps1') -Directory $elsewhere -Binary $binaryPath
+        Check ($LASTEXITCODE -eq 0) 'An adjacent binary suppressed the explicit-destination download'
+        Check ((Get-FileHash -LiteralPath (Join-Path $elsewhere $exe)).Hash -eq (Get-FileHash -LiteralPath $binaryPath).Hash) 'Explicit destination did not receive the verified binary'
+        Check (Test-Path -LiteralPath (Join-Path $elsewhere '.wireview-install.json')) 'Explicit destination was not marked as managed'
+    }
     Set-Content -LiteralPath (Join-Path $managed 'user-notes.txt') -Value 'Keep me.'
     Run-Uninstall $managed
     Check (-not (Test-Path -LiteralPath (Join-Path $managed $exe))) 'Copied installer left the managed executable'
@@ -98,7 +113,7 @@ try {
     Fixture $foreign 'someone/another-repo'
     Run-Uninstall $foreign
     Check (Test-Path -LiteralPath (Join-Path $foreign $exe)) 'Foreign marker should not authorise deletion'
-    Write-Host 'PASS: managed download, copied installer, older default/custom install, source files and user files.'
+    Write-Host 'PASS: managed download, explicit destinations with adjacent binaries, copied installer, older default/custom install, source files and user files.'
 } finally {
     $env:LOCALAPPDATA = $oldLocal
     $env:TEMP = $oldTemp
