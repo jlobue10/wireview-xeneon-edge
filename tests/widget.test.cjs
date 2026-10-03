@@ -54,6 +54,14 @@ test('local pages follow their origin, hosted pages retain the loopback default'
   assert.equal(widget('http://localhost:9000/?host=http://localhost:9999/').api.cfg.host, 'http://localhost:9999');
 });
 
+test('both connector temperatures are labelled, missing ones shown as --', () => {
+  const { api } = widget();
+  assert.equal(api.temps({ temp_in: 35.46, temp_out: 35.84 }), 'in 35.5 · out 35.8 °C');
+  assert.equal(api.temps({ temp_in: -5.5, temp_out: null }), 'in -5.5 · out -- °C');
+  assert.equal(api.temps({ temp_in: 'x' }), 'in -- · out -- °C');
+  assert.equal(api.temps(null), 'in -- · out -- °C');
+});
+
 test('source staleness is displayed at five seconds even with a 60-second poll interval', async () => {
   const w = widget('http://localhost:9000/?interval=60000'); w.start(); await w.reply(0);
   assert.equal(w.updates[0].problem, null);

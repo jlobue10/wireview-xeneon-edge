@@ -33,7 +33,7 @@
 <body>
 <main>
   <h1>WireView Pro II widgets for the Corsair Xeneon Edge</h1>
-  <p>Live per-wire current, total current and total power from a Thermal Grizzly WireView Pro II, shown on the Xeneon Edge through iCUE's iFrame widget.</p>
+  <p>Live per-wire current, total current, total power and the connector's in/out temperatures from a Thermal Grizzly WireView Pro II, shown on the Xeneon Edge through iCUE's iFrame widget.</p>
   <p><span class="status" id="bridge"><span class="dot"></span><span id="bridge-text">Checking local bridge…</span></span></p>
 
   <h2>Widgets</h2>
@@ -65,9 +65,9 @@
 (function () {
   const base = location.href.replace(/[^/]*$/, '');
   const widgets = [
-    ['per-wire', 'Per-wire current', 'Six bars, one per 12V wire, against the per-wire limit.'],
-    ['total-current', 'Total current', 'Headline amps with a gauge against the total limit.'],
-    ['total-power', 'Total power', 'Headline watts with a gauge against the cable rating.'],
+    ['per-wire', 'Per-wire current', 'Six bars, one per 12V wire, against the per-wire limit; totals and in/out temperatures below.'],
+    ['total-current', 'Total current', 'Headline amps with a gauge against the total limit; average voltage, watts and in/out temperatures below.'],
+    ['total-power', 'Total power', 'Headline watts with a gauge against the cable rating; amps and in/out temperatures below.'],
   ];
   const cards = document.getElementById('cards');
   const local = 'http://localhost:8765/';

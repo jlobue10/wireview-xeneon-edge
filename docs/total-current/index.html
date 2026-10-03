@@ -12,6 +12,7 @@
     <div class="hero">
       <div class="value"><span id="val">--</span><span class="unit">A</span></div>
       <div class="sub" id="sub">-- V avg · -- W</div>
+      <div class="sub" id="temps">in -- · out -- °C</div>
       <div class="status" id="status"><span class="dot"></span><span id="status-text">Within limits</span></div>
     </div>
     <div class="gauge" id="gauge">
@@ -28,7 +29,7 @@
 (function () {
   const WV = window.WireView, cfg = WV.cfg, body = document.body;
   document.getElementById('cap-right').textContent = 'limit ' + cfg.totalLimit + ' A';
-  const val = document.getElementById('val'), sub = document.getElementById('sub');
+  const val = document.getElementById('val'), sub = document.getElementById('sub'), temps = document.getElementById('temps');
   const status = document.getElementById('status'), statusText = document.getElementById('status-text');
   const gauge = document.getElementById('gauge'), arc = document.getElementById('arc'), pctEl = document.getElementById('pct');
   WV.start(function (d, err) {
@@ -43,6 +44,7 @@
     const I = d.total_current;
     val.textContent = WV.fmt(I);
     sub.textContent = WV.fmt(d.avg_voltage, 2) + ' V avg · ' + WV.fmt(d.total_power, 0) + ' W';
+    temps.textContent = WV.temps(d);
     const ratio = I == null ? 0 : Math.max(0, Math.min(1, I / cfg.totalLimit));
     arc.setAttribute('stroke-dashoffset', String(75 - 75 * ratio));
     pctEl.textContent = Math.round(ratio * 100) + '%';

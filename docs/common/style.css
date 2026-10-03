@@ -53,6 +53,7 @@ body.problem-on .problem { display: flex; }
 .hero .value { font-size: var(--fs-hero); font-weight: 600; line-height: 1; letter-spacing: -0.02em; white-space: nowrap; }
 .hero .value .unit { font-size: var(--fs-unit); font-weight: 400; color: var(--ink-2); margin-left: 0.15em; }
 .hero .sub { font-size: var(--fs-sub); color: var(--ink-2); margin-top: calc(var(--u) * 2); white-space: nowrap; }
+.hero .sub + .sub { margin-top: calc(var(--u) * 0.5); }
 .gauge { flex: none; height: calc(var(--u) * 58); aspect-ratio: 1 / 1; }
 .gauge svg { width: 100%; height: 100%; display: block; }
 .gauge .track { stroke: var(--track); }
