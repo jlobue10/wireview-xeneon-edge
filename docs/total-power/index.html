@@ -11,7 +11,8 @@
   <div class="hero-wrap">
     <div class="hero">
       <div class="value"><span id="val">--</span><span class="unit">W</span></div>
-      <div class="sub" id="sub">-- A · -- °C</div>
+      <div class="sub" id="sub">-- A</div>
+      <div class="sub" id="temps">in -- · out -- °C</div>
       <div class="status" id="status"><span class="dot"></span><span id="status-text">Within rating</span></div>
     </div>
     <div class="gauge" id="gauge">
@@ -28,7 +29,7 @@
 (function () {
   const WV = window.WireView, cfg = WV.cfg, body = document.body;
   document.getElementById('cap-right').textContent = 'cable ' + cfg.cableW + ' W';
-  const val = document.getElementById('val'), sub = document.getElementById('sub');
+  const val = document.getElementById('val'), sub = document.getElementById('sub'), temps = document.getElementById('temps');
   const status = document.getElementById('status'), statusText = document.getElementById('status-text');
   const gauge = document.getElementById('gauge'), arc = document.getElementById('arc'), pctEl = document.getElementById('pct');
   WV.start(function (d, err) {
@@ -47,8 +48,8 @@
     }
     const P = d.total_power;
     val.textContent = WV.fmt(P, Math.min(cfg.decimals, 1));
-    const t = d.temp_out != null ? d.temp_out : d.temp_in;
-    sub.textContent = WV.fmt(d.total_current, 2) + ' A · ' + WV.fmt(t, 1) + ' °C';
+    sub.textContent = WV.fmt(d.total_current, 2) + ' A';
+    temps.textContent = WV.temps(d);
     const ratio = P == null ? 0 : Math.max(0, Math.min(1, P / cfg.cableW));
     arc.setAttribute('stroke-dashoffset', String(75 - 75 * ratio));
     pctEl.textContent = Math.round(ratio * 100) + '%';

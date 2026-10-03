@@ -64,6 +64,11 @@
     return v.toFixed(decimals == null ? cfg.decimals : decimals);
   }
 
+  // The connector's own two sensors, e.g. "in 35.5 · out 35.8 °C".
+  function temps(d) {
+    return 'in ' + fmt(d && d.temp_in, 1) + ' · out ' + fmt(d && d.temp_out, 1) + ' °C';
+  }
+
   let failures = 0;
   let timer = null;
   let freshnessTimer = null;
@@ -169,5 +174,5 @@
     return { title: 'No data', hint: d.error || '' };
   }
 
-  window.WireView = { cfg, level, activeFaults, fmt, start, problemText };
+  window.WireView = { cfg, level, activeFaults, fmt, temps, start, problemText };
 })();

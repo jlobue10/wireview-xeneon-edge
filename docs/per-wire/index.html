@@ -19,8 +19,9 @@
   .wire .bar .limit { position: absolute; left: 0; right: 0; bottom: 80%; border-top: 1px dashed var(--ink-3); }
   .wire .pin { font-size: var(--fs-sub); color: var(--ink-2); letter-spacing: 0.05em; }
   .wire .watts { font-size: var(--fs-cap); color: var(--ink-3); }
-  .foot { display: flex; justify-content: space-between; align-items: baseline; gap: 1em; font-size: var(--fs-sub); color: var(--ink-2); white-space: nowrap; }
+  .foot { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 0 1em; font-size: var(--fs-sub); color: var(--ink-2); white-space: nowrap; }
   .foot b { color: var(--ink); font-weight: 600; }
+  .foot .status { margin-left: auto; }
   /* Vertical slots: two rows of three */
   @media (max-aspect-ratio: 1.2 / 1) {
     .wires { grid-template-columns: repeat(3, 1fr); grid-template-rows: 1fr 1fr; }
@@ -31,7 +32,7 @@
 <body>
   <div class="caption"><span>WireView Pro II · per-wire current</span><span class="right" id="cap-right"></span></div>
   <div class="wires" id="wires"></div>
-  <div class="foot"><span>Total <b id="tot-a">--</b> A · <b id="tot-w">--</b> W</span><span class="status" id="status"><span class="dot"></span><span id="status-text">Within limits</span></span></div>
+  <div class="foot"><span>Total <b id="tot-a">--</b> A · <b id="tot-w">--</b> W</span><span id="temps">in -- · out -- °C</span><span class="status" id="status"><span class="dot"></span><span id="status-text">Within limits</span></span></div>
   <div class="problem"><div class="title" id="p-title"></div><div class="hint" id="p-hint"></div></div>
 <script src="../common/wireview.js"></script>
 <script>
@@ -77,6 +78,7 @@
     });
     document.getElementById('tot-a').textContent = WV.fmt(d.total_current);
     document.getElementById('tot-w').textContent = WV.fmt(d.total_power, 0);
+    document.getElementById('temps').textContent = WV.temps(d);
     const faults = WV.activeFaults(d);
     if (faults.length) { worst = 'crit'; statusText.textContent = faults.join(', '); }
     else if (worst === 'crit') statusText.textContent = 'Wire over limit';
