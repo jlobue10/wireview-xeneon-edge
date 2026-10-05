@@ -10,6 +10,7 @@
 # Fully verified: download wireview-bridge.exe and install.ps1 from the release, compare the
 # executable's SHA-256 with the release notes, and run install.ps1 from that folder (installs the
 # executable next to it; -Ref/-Sha256 unused).
+# Options: -ExtraArgs '--port 9000', -NoStart, -Log [-LogDir <folder>] (CSV log of the readings, off by default)
 # Remove:
 #   powershell -ExecutionPolicy Bypass -File install.ps1 -Uninstall
 #
@@ -23,7 +24,9 @@ param(
     [string]$Ref = '',
     [string]$Sha256 = '',
     [switch]$Uninstall,
-    [switch]$NoStart
+    [switch]$NoStart,
+    [switch]$Log,
+    [string]$LogDir = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -172,6 +175,14 @@ $version = (& $exePath --version | Out-String).Trim()
 if ($LASTEXITCODE -ne 0) { throw "$exePath does not run (exit code $LASTEXITCODE)" }
 Say "Installed $version"
 
+# --- optional CSV log (off unless -Log) ----------------------------------------
+# One log-<date>-<time>.csv per start, a row a minute, in the format the Thermal Grizzly
+# WireView app exports. -LogDir chooses the folder; the default is logs\ in the install folder.
+if ($Log) {
+    if (-not $LogDir) { $LogDir = Join-Path $Dir 'logs' }
+    $BaseArgs = (@($BaseArgs, "--csv-log `"$LogDir`"") | Where-Object { $_ }) -join ' '
+}
+
 # --- run at logon (per-user scheduled task) ----------------------------------
 $daemonArgs = (@($BaseArgs, $ExtraArgs) | Where-Object { $_ }) -join ' '
 
@@ -205,4 +216,6 @@ Write-Host '  iCUE         : select the Xeneon Edge, add an iFrame widget, paste
 Write-Host '                   http://localhost:8765/per-wire/'
 Write-Host '                   http://localhost:8765/total-current/'
 Write-Host '                   http://localhost:8765/total-power/'
+if ($Log) { Write-Host "  CSV log      : $LogDir\log-<date>-<time>.csv, a row a minute (WireView app export format)" }
+else { Write-Host '  CSV log      : off   (install.ps1 -Log, or -Log -LogDir <folder>)' }
 Write-Host "  Manage       : Task Scheduler > '$TaskName'   |   uninstall: install.ps1 -Uninstall"

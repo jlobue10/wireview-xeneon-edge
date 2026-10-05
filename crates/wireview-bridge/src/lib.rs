@@ -30,7 +30,7 @@ use std::time::{Duration, Instant};
 
 use socket2::{Domain, Protocol, Socket, Type};
 use wireview_core::auth::{AUTH_HEADER, bridge_sign, valid_nonce};
-use wireview_core::{Reader, Readings, unix_time};
+use wireview_core::{CsvLog, Reader, Readings, unix_time};
 
 use crate::http::{ReadError, Repeated, Request, Response, read_request};
 use crate::statics::Found;
@@ -59,6 +59,8 @@ pub struct Config {
     /// Key for `X-WireView-Auth`; without one no reply is signed.
     pub secret: Option<Vec<u8>>,
     pub request_timeout: Duration,
+    /// Append the readings to this CSV log at its interval.
+    pub csv_log: Option<CsvLog>,
 }
 
 impl Config {
@@ -71,6 +73,7 @@ impl Config {
             reader,
             secret: None,
             request_timeout: REQUEST_TIMEOUT,
+            csv_log: None,
         }
     }
 }
@@ -291,6 +294,10 @@ pub fn start(config: Config) -> Result<Bridge, StartError> {
 
     let mut addrs = Vec::new();
     let mut threads = Vec::new();
+    if let Some(log) = config.csv_log {
+        let state = Arc::clone(&state);
+        threads.push(thread::spawn(move || csv_loop(&state, log)));
+    }
     for l in listeners {
         addrs.push(l.local_addr().map_err(|error| StartError::Bind {
             addr: SocketAddr::new(v4, port),
@@ -300,6 +307,24 @@ pub fn start(config: Config) -> Result<Bridge, StartError> {
         threads.push(thread::spawn(move || accept_loop(l, state)));
     }
     Ok(Bridge { state, addrs, threads })
+}
+
+/// Read the device at the log's interval and append a row, until shutdown
+/// or the first write error.
+fn csv_loop(state: &State, mut log: CsvLog) {
+    while !state.stopping.load(Ordering::SeqCst) {
+        let wait = log.due_in();
+        if !wait.is_zero() {
+            thread::sleep(wait.min(Duration::from_millis(250)));
+            continue;
+        }
+        let data = catch_unwind(AssertUnwindSafe(|| state.reader.read()))
+            .unwrap_or_else(|_| Readings::problem(state.reader.source().as_str(), "Reader error", "the reader failed unexpectedly"));
+        if let Err(e) = log.record(&data) {
+            println!("csv log: cannot write {}: {e}; logging stopped", log.path().display());
+            return;
+        }
+    }
 }
 
 /// Holds one of the [`MAX_WORKERS`] slots.

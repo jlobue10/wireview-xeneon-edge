@@ -79,6 +79,8 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 ```
 
 `-NoStart` registers without starting; `-ExtraArgs '--port 9000'` passes options to the bridge.
+`-Log` also writes the readings to a CSV log (off by default; see [CSV log](#csv-log)), in
+`logs\` under the install folder unless `-LogDir <folder>` says otherwise.
 
 <details>
 <summary>Build from source</summary>
@@ -188,10 +190,26 @@ When there is no reading, `ok` is false and `status` / `hint` say why (for examp
 `"COM port busy"` / `"close the WireView app (and HWiNFO)"`). `GET /api/health` returns
 `{"ok":true}`. `served_at` is when the bridge produced the reply; with `?nonce=<hex>` the
 `X-WireView-Auth` header authenticates it (see above). Options: `--port`, `--bind`,
-`--no-static`, `--static-dir`, `--source`, `--serial-port`, `--allow-origin`, `--version`.
+`--no-static`, `--static-dir`, `--source`, `--serial-port`, `--allow-origin`, `--csv-log`,
+`--csv-interval`, `--version`.
 `--bind` other than loopback exposes the readings and widgets to that network and turns the
 `Host` check off; leave it at the default unless you mean that. Set `WIREVIEW_BRIDGE_LOG=1` to
 log each request.
+
+## CSV log
+
+Off by default. `--csv-log <DIR>` (installer: `-Log`, `-LogDir`) makes the bridge write a new
+`log-<date>-<time>.csv` in that folder each time it starts and append a row every
+`--csv-interval` seconds (default 60, like the WireView app's own log), each row flushed as it is
+written. The file matches the CSV the Thermal Grizzly WireView app exports, so the same
+spreadsheets and scripts read both: the header
+`Timestamp,Connected,HW,FW,SumPowerW,SumCurrentA,OnboardInC,OnboardOutC,Ext1C,Ext2C,V1..V6,I1..I6`,
+local-time timestamps with seven fraction digits, three decimals for watts, amps and volts, two
+for °C, `0` for a value the device did not report (an absent external probe, say), CRLF line
+endings. `Connected` is `True` on rows that hold a live reading; `FW` is the firmware version the
+device reports; `HW` is empty because the serial protocol has no hardware revision. On Linux and
+macOS the timestamps are UTC. Run only one logger per device: if the Nexus daemon logs too, give
+the two different folders.
 
 ## Tests
 

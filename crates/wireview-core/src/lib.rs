@@ -8,15 +8,19 @@
 //!   returns one [`readings::Readings`] shape whatever the source.
 //! * [`auth`]    is the per-user secret and the HMAC that lets a client tell
 //!   the real bridge from any other process that owns the port.
+//! * [`csvlog`]  writes the readings to CSV files in the format the Thermal
+//!   Grizzly WireView app exports (off unless asked for).
 
 pub mod auth;
 pub mod console;
+pub mod csvlog;
 mod http_client;
 pub mod hwinfo;
 pub mod readings;
 pub mod serial;
 pub mod source;
 
+pub use csvlog::CsvLog;
 pub use readings::{Device, Faults, Pin, Readings};
 pub use source::{DEFAULT_BRIDGE_URL, Reader, Source};
 
