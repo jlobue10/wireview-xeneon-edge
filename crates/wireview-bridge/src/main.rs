@@ -6,6 +6,7 @@
 //! wireview-bridge --no-static      # JSON only
 //! wireview-bridge --source hwinfo
 //! wireview-bridge --allow-origin https://example.github.io   # another widget host
+//! wireview-bridge --csv-log C:\WireView\logs            # also log a CSV row a minute
 //! ```
 
 // Started at logon by a Scheduled Task: no console window.
@@ -13,10 +14,12 @@
 
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::Duration;
 
 use clap::Parser;
 use wireview_bridge::{Config, DEFAULT_PORT, PAGES_ORIGIN, Statics, VERSION, start};
 use wireview_core::auth::SecretStore;
+use wireview_core::csvlog::{self, CsvLog};
 use wireview_core::{Reader, Source};
 
 fn source(s: &str) -> Result<Source, String> {
@@ -56,6 +59,15 @@ struct Args {
     /// WireView COM port (default: auto-detect)
     #[arg(long, value_name = "COMx")]
     serial_port: Option<String>,
+
+    /// Also write the readings to a new log-<date>-<time>.csv in this directory,
+    /// in the format the Thermal Grizzly WireView app exports (off by default)
+    #[arg(long, value_name = "DIR")]
+    csv_log: Option<PathBuf>,
+
+    /// Seconds between CSV rows (1-86400)
+    #[arg(long, value_name = "SECONDS", default_value = "60", value_parser = csvlog::parse_interval, requires = "csv_log")]
+    csv_interval: Duration,
 }
 
 fn main() -> ExitCode {
@@ -82,12 +94,27 @@ fn main() -> ExitCode {
         );
     }
 
+    let csv_log = match &args.csv_log {
+        None => None,
+        Some(dir) => match CsvLog::create(dir, args.csv_interval) {
+            Ok(log) => Some(log),
+            Err(e) => {
+                eprintln!("--csv-log {}: cannot create the log file: {e}", dir.display());
+                return ExitCode::from(2);
+            }
+        },
+    };
+
     let mut config = Config::new(Reader::new(args.source, args.serial_port, None));
     config.port = args.port;
     config.bind = args.bind.clone();
     config.allow_origins = args.allow_origin;
     config.statics = statics.clone();
     config.secret = secret;
+    if let Some(log) = &csv_log {
+        println!("CSV log: {} (a row every {} s)", log.path().display(), log.interval().as_secs());
+    }
+    config.csv_log = csv_log;
 
     let bridge = match start(config) {
         Ok(b) => b,

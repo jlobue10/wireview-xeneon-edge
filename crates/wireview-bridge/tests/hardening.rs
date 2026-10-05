@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 use wireview_bridge::{Bridge, Config, MAX_WORKERS, Statics, start};
 use wireview_core::auth::{AUTH_HEADER, SecretStore, bridge_sign, new_nonce};
+use wireview_core::csvlog::{self, CsvLog};
 use wireview_core::{Device, Pin, Reader, Readings, Source, unix_time};
 
 const SECRET: &[u8; 64] = &[b's'; 64];
@@ -511,10 +512,57 @@ fn binary_arguments() {
         &["--port", "70000"],
         &["--no-static", "--static-dir", "."],
         &["--static-dir", "/no/such/dir"],
+        &["--csv-interval", "5"],
+        &["--csv-log", "x", "--csv-interval", "0"],
+        &["--csv-log", "x", "--csv-interval", "forever"],
     ] {
         let (code, _, err) = run(bad);
         assert_eq!(code, Some(2), "{bad:?}: {err}");
     }
+    // A log directory that cannot be created is refused before anything listens.
+    let unwritable = temp("csv-unwritable");
+    std::fs::write(&unwritable, b"a file, not a directory").unwrap();
+    let (code, _, err) = run(&["--csv-log", unwritable.join("logs").to_str().unwrap(), "--port", "1"]);
+    assert_eq!(code, Some(2), "{err}");
+    assert!(err.contains("cannot create the log file"), "{err}");
+    std::fs::remove_file(unwritable).unwrap();
+}
+
+#[test]
+fn csv_log_writes_the_header_and_rows_from_its_own_thread_and_stops_with_the_bridge() {
+    let dir = temp("csv");
+    let log = CsvLog::create(&dir, csvlog::MIN_INTERVAL).unwrap();
+    let path = log.path().to_path_buf();
+    let b = bridge_with(|c| c.csv_log = Some(log));
+    // The first row is due at once, the second after the interval; no request is needed.
+    wait_for("two CSV rows", Duration::from_secs(5), || {
+        std::fs::read_to_string(&path).is_ok_and(|t| {
+            t.matches("\r\n")
+            .count()
+                >= 3
+        })
+    });
+    let started = Instant::now();
+    b.shutdown();
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "the log thread must notice the shutdown"
+    );
+    let text = std::fs::read_to_string(&path).unwrap();
+    let lines: Vec<&str> = text.split("\r\n").collect();
+    assert_eq!(lines[0], csvlog::HEADER);
+    let row: Vec<&str> = lines[1].split(',').collect();
+    assert_eq!(row.len(), 22, "{}", lines[1]);
+    assert_eq!(&row[1..6], ["True", "", "5", "150.000", "12.500"]);
+    assert_eq!(&row[10..16], ["12.000"; 6]);
+    assert_eq!(&row[16..22], ["2.000"; 6]);
+    assert!(
+        row[0].len() == 27 && row[0].as_bytes()[10] == b'T' && row[0].as_bytes()[19] == b'.',
+        "{}",
+        row[0]
+    );
+    assert!(!text.contains("SECRETUID"));
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]

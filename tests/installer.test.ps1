@@ -1,6 +1,6 @@
 # Isolated installer regression checks. Administrative APIs and downloads are
 # mocked; only --version is executed, using the binary already built by Cargo.
-param([switch]$Child, [string]$Installer, [string]$Directory, [string]$Binary, [switch]$Download, [switch]$ExplicitDir)
+param([switch]$Child, [string]$Installer, [string]$Directory, [string]$Binary, [switch]$Download, [switch]$ExplicitDir, [switch]$WithLog)
 $ErrorActionPreference = 'Stop'
 if ($Child) {
     function Get-ScheduledTask { return $null }
@@ -8,7 +8,7 @@ if ($Child) {
     function Stop-ScheduledTask {}
     function Stop-Process {}
     function Unregister-ScheduledTask {}
-    function New-ScheduledTaskAction {}
+    function New-ScheduledTaskAction { Set-Content -LiteralPath (Join-Path $Directory 'task-arguments.txt') -Value ($args -join ' ') }
     function New-ScheduledTaskTrigger {}
     function New-ScheduledTaskPrincipal {}
     function New-ScheduledTaskSettingsSet { return [pscustomobject]@{ ExecutionTimeLimit = '' } }
@@ -21,7 +21,8 @@ if ($Child) {
     }
     if ($Download) {
         $hash = (Get-FileHash -LiteralPath $Binary -Algorithm SHA256).Hash
-        & $Installer -Dir $Directory -Ref v2.2.0 -Sha256 $hash -NoStart
+        if ($WithLog) { & $Installer -Dir $Directory -Ref v2.2.0 -Sha256 $hash -NoStart -Log }
+        else { & $Installer -Dir $Directory -Ref v2.2.0 -Sha256 $hash -NoStart }
     } elseif ($ExplicitDir) { & $Installer -Uninstall -Dir $Directory }
     else { & $Installer -Uninstall }
     exit 0
@@ -69,6 +70,16 @@ try {
     Check ($LASTEXITCODE -eq 0) 'Mocked download install failed'
     $marker = Get-Content -LiteralPath (Join-Path $managed '.wireview-install.json') -Raw | ConvertFrom-Json
     Check ($marker.repo -eq $repo -and $marker.exe -eq $exe -and $marker.schema -eq 1) 'Install marker missing or incorrect'
+    $taskArgs = Get-Content -LiteralPath (Join-Path $managed 'task-arguments.txt') -Raw
+    Check ($taskArgs -notmatch '--csv-log') 'CSV logging must be off unless -Log is given'
+
+    # -Log adds the CSV log, in logs\ under the install folder unless -LogDir says otherwise.
+    $logged = Join-Path $root 'downloaded-logged'
+    & $engine -NoProfile -File $PSCommandPath -Child -Download -WithLog -Installer (Join-Path $repoRoot 'install.ps1') -Directory $logged -Binary $binaryPath
+    Check ($LASTEXITCODE -eq 0) 'Mocked download install with -Log failed'
+    $taskArgs = Get-Content -LiteralPath (Join-Path $logged 'task-arguments.txt') -Raw
+    $expectedLogDir = Join-Path $logged 'logs'
+    Check ($taskArgs -like "*--csv-log `"$expectedLogDir`"*") "-Log did not pass --csv-log for $expectedLogDir (got: $taskArgs)"
 
     # A copied installer has a binary beside it. Selecting a different
     # destination must still download and verify, even if that destination
@@ -113,7 +124,7 @@ try {
     Fixture $foreign 'someone/another-repo'
     Run-Uninstall $foreign
     Check (Test-Path -LiteralPath (Join-Path $foreign $exe)) 'Foreign marker should not authorise deletion'
-    Write-Host 'PASS: managed download, explicit destinations with adjacent binaries, copied installer, older default/custom install, source files and user files.'
+    Write-Host 'PASS: managed download, -Log, explicit destinations with adjacent binaries, copied installer, older default/custom install, source files and user files.'
 } finally {
     $env:LOCALAPPDATA = $oldLocal
     $env:TEMP = $oldTemp
