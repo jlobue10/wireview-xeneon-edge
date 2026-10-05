@@ -536,11 +536,7 @@ fn csv_log_writes_the_header_and_rows_from_its_own_thread_and_stops_with_the_bri
     let b = bridge_with(|c| c.csv_log = Some(log));
     // The first row is due at once, the second after the interval; no request is needed.
     wait_for("two CSV rows", Duration::from_secs(5), || {
-        std::fs::read_to_string(&path).is_ok_and(|t| {
-            t.matches("\r\n")
-            .count()
-                >= 3
-        })
+        std::fs::read_to_string(&path).is_ok_and(|t| t.matches("\r\n").count() >= 3)
     });
     let started = Instant::now();
     b.shutdown();
