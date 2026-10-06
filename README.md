@@ -158,8 +158,14 @@ localhost form is simply future-proof.
 | `cable_w` | cable's own rating | Cable rating in W (total-power widget); the WireView reports 600/450/300/150 |
 | `decimals` | `2` | Decimals on the headline numbers |
 | `interval` | `1000` | Poll interval in ms, clamped to 250–60000; stale detection runs independently |
-| `accent`, `bg`, `fg` | orange / black / white | Hex colours without `#` |
+| `theme` | `grizzly` | Colour theme: `grizzly` (orange on black), `corsair` (yellow), `ice` (cyan), `mono` (greyscale), `nord`, `light` (dark text on light) |
+| `accent`, `bg`, `fg` | the theme's | Hex colours without `#`; override the theme's accent, background and text colour |
 | `label=0` | | Hide the caption line |
+
+Themes only change colours; every theme keeps its warning and critical colours apart from
+the accent, and the text always says what a colour means. Example:
+`http://localhost:8765/total-power/?theme=nord`. The Nexus daemon offers the same six
+palettes as `--theme`, so both screens can match.
 
 Warning colour begins at 80 % of a limit, critical at 100 %. The device's own fault flags
 (over-current, wire over-current, over-power, chip/sensor over-temperature, current imbalance)

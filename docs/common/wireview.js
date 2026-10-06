@@ -10,7 +10,8 @@
  *   ?cable_w=600                  cable power rating used by the power gauge (default: what the cable reports)
  *   ?interval=1000                poll interval in ms
  *   ?decimals=2                   decimals on the headline numbers
- *   ?accent=f08e33                accent colour (hex, no #)
+ *   ?theme=nord                   colour theme: grizzly (default), corsair, ice, mono, nord, light
+ *   ?accent=f08e33                accent colour (hex, no #); overrides the theme's
  *   ?bg=000000  ?fg=ffffff        background / text colour
  *   ?label=0                      hide the small caption line
  */
@@ -21,6 +22,8 @@
   const STALE_S = 5, SERVED_STALE_S = 10;
   const hex = (k) => { const v = q.get(k); return v && /^[0-9a-fA-F]{3,8}$/.test(v) ? '#' + v : null; };
   const localPage = /^https?:$/.test(location.protocol) && ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
+  const THEMES = ['grizzly', 'corsair', 'ice', 'mono', 'nord', 'light'];
+  const theme = (q.get('theme') || 'grizzly').toLowerCase();
 
   const cfg = {
     host: (q.get('host') || (localPage ? location.origin : 'http://localhost:8765')).replace(/\/+$/, ''),
@@ -32,9 +35,12 @@
     decimals: Math.max(0, Math.min(3, num('decimals', 2))),
     showLabel: q.get('label') !== '0',
     accent: hex('accent'), bg: hex('bg'), fg: hex('fg'),
+    theme: THEMES.includes(theme) ? theme : 'grizzly',
   };
 
   const root = document.documentElement;
+  // The default theme is the stylesheet's own tokens; the others are data-theme blocks.
+  if (cfg.theme !== 'grizzly' && typeof root.setAttribute === 'function') root.setAttribute('data-theme', cfg.theme);
   if (cfg.accent) root.style.setProperty('--accent', cfg.accent);
   if (cfg.bg) root.style.setProperty('--surface', cfg.bg);
   if (cfg.fg) root.style.setProperty('--ink', cfg.fg);
