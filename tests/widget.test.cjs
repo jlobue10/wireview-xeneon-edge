@@ -56,7 +56,7 @@ test('local pages follow their origin, hosted pages retain the loopback default'
 });
 
 test('a known theme is applied through data-theme, unknown names and the default leave it alone', () => {
-  for (const name of ['corsair', 'ice', 'mono', 'nord', 'light']) {
+  for (const name of ['corsair', 'ice', 'mono', 'nord', 'light', 'dracula', 'solarized-light', 'tokyo-night', 'high-contrast']) {
     const w = widget('http://localhost:8765/total-power/?theme=' + name);
     assert.equal(w.api.cfg.theme, name);
     assert.equal(w.attrs['data-theme'], name);

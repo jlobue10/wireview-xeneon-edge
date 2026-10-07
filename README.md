@@ -158,14 +158,44 @@ localhost form is simply future-proof.
 | `cable_w` | cable's own rating | Cable rating in W (total-power widget); the WireView reports 600/450/300/150 |
 | `decimals` | `2` | Decimals on the headline numbers |
 | `interval` | `1000` | Poll interval in ms, clamped to 250–60000; stale detection runs independently |
-| `theme` | `grizzly` | Colour theme: `grizzly` (orange on black), `corsair` (yellow), `ice` (cyan), `mono` (greyscale), `nord`, `light` (dark text on light) |
+| `theme` | `grizzly` | Colour theme, one of the names below |
 | `accent`, `bg`, `fg` | the theme's | Hex colours without `#`; override the theme's accent, background and text colour |
 | `label=0` | | Hide the caption line |
 
+### Themes
+
+| Theme | Look |
+|---|---|
+| `grizzly` | Thermal Grizzly orange on black (default) |
+| `corsair` | yellow accent, orange warnings |
+| `ice` | cyan accent |
+| `mono` | greyscale, alarms in colour |
+| `nord` | Nord frost blue on polar night |
+| `light` | dark text on a light background |
+| `dracula` | Dracula purple on dark |
+| `gruvbox` | Gruvbox dark, blue accent |
+| `solarized` | Solarized dark |
+| `solarized-light` | Solarized light |
+| `monokai` | Monokai cyan on dark |
+| `catppuccin` | Catppuccin Mocha mauve |
+| `tokyo-night` | Tokyo Night blue |
+| `one-dark` | Atom One Dark blue |
+| `rose-pine` | Rose Pine iris |
+| `everforest` | Everforest aqua on green-grey |
+| `matrix` | green phosphor on black |
+| `amber` | amber phosphor on black |
+| `cyberpunk` | magenta neon on midnight blue |
+| `ocean` | sky blue on deep navy |
+| `emerald` | green accent on black |
+| `violet` | purple accent on black |
+| `sunset` | pink accent on dark plum |
+| `slate` | grey-blue on slate |
+| `high-contrast` | yellow on black, maximum contrast |
+
 Themes only change colours; every theme keeps its warning and critical colours apart from
 the accent, and the text always says what a colour means. Example:
-`http://localhost:8765/total-power/?theme=nord`. The Nexus daemon offers the same six
-palettes as `--theme`, so both screens can match.
+`http://localhost:8765/total-power/?theme=nord`. The Nexus daemon offers the same names as
+`--theme`, so both screens can match; its project page previews every one.
 
 Warning colour begins at 80 % of a limit, critical at 100 %. The device's own fault flags
 (over-current, wire over-current, over-power, chip/sensor over-temperature, current imbalance)
