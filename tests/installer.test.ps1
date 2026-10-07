@@ -21,8 +21,8 @@ if ($Child) {
     }
     if ($Download) {
         $hash = (Get-FileHash -LiteralPath $Binary -Algorithm SHA256).Hash
-        if ($WithLog) { & $Installer -Dir $Directory -Ref v2.4.0 -Sha256 $hash -NoStart -Log }
-        else { & $Installer -Dir $Directory -Ref v2.4.0 -Sha256 $hash -NoStart }
+        if ($WithLog) { & $Installer -Dir $Directory -Ref v2.5.0 -Sha256 $hash -NoStart -Log }
+        else { & $Installer -Dir $Directory -Ref v2.5.0 -Sha256 $hash -NoStart }
     } elseif ($ExplicitDir) { & $Installer -Uninstall -Dir $Directory }
     else { & $Installer -Uninstall }
     exit 0

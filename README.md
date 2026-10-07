@@ -65,7 +65,7 @@ The one-liner above runs whatever `install.ps1` is on `main` today. To install e
 reviewed, fetch the bootstrap from the same tag and pass the hash from that release's notes:
 
 ```
-powershell -ExecutionPolicy Bypass -c "& ([scriptblock]::Create((irm https://raw.githubusercontent.com/jlobue10/wireview-xeneon-edge/v2.4.0/install.ps1))) -Ref v2.4.0 -Sha256 <hash>"
+powershell -ExecutionPolicy Bypass -c "& ([scriptblock]::Create((irm https://raw.githubusercontent.com/jlobue10/wireview-xeneon-edge/v2.5.0/install.ps1))) -Ref v2.5.0 -Sha256 <hash>"
 ```
 
 Fully verified, with no remote code before the check: download `wireview-bridge.exe` and
