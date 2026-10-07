@@ -10,7 +10,7 @@
  *   ?cable_w=600                  cable power rating used by the power gauge (default: what the cable reports)
  *   ?interval=1000                poll interval in ms
  *   ?decimals=2                   decimals on the headline numbers
- *   ?theme=nord                   colour theme: grizzly (default), corsair, ice, mono, nord, light
+ *   ?theme=nord                   colour theme (default grizzly; all names in the README)
  *   ?accent=f08e33                accent colour (hex, no #); overrides the theme's
  *   ?bg=000000  ?fg=ffffff        background / text colour
  *   ?label=0                      hide the small caption line
@@ -22,7 +22,7 @@
   const STALE_S = 5, SERVED_STALE_S = 10;
   const hex = (k) => { const v = q.get(k); return v && /^[0-9a-fA-F]{3,8}$/.test(v) ? '#' + v : null; };
   const localPage = /^https?:$/.test(location.protocol) && ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
-  const THEMES = ['grizzly', 'corsair', 'ice', 'mono', 'nord', 'light'];
+  const THEMES = ['grizzly', 'corsair', 'ice', 'mono', 'nord', 'light', 'dracula', 'gruvbox', 'solarized', 'solarized-light', 'monokai', 'catppuccin', 'tokyo-night', 'one-dark', 'rose-pine', 'everforest', 'matrix', 'amber', 'cyberpunk', 'ocean', 'emerald', 'violet', 'sunset', 'slate', 'high-contrast'];
   const theme = (q.get('theme') || 'grizzly').toLowerCase();
 
   const cfg = {

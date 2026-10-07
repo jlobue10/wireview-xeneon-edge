@@ -38,6 +38,82 @@
   --surface: #f4f4f2; --ink: #111111; --ink-2: #4a4a46; --ink-3: #7a7973;
   --track: #d9d8d3; --accent: #d9741a; --warn: #b8860b; --crit: #c62828; --good: #2e7d32;
 }
+:root[data-theme="dracula"] {
+  --surface: #282a36; --ink: #f8f8f2; --ink-2: #c9c9d0; --ink-3: #6272a4;
+  --track: #44475a; --accent: #bd93f9; --warn: #ffb86c; --crit: #ff5555; --good: #50fa7b;
+}
+:root[data-theme="gruvbox"] {
+  --surface: #282828; --ink: #ebdbb2; --ink-2: #bdae93; --ink-3: #928374;
+  --track: #3c3836; --accent: #83a598; --warn: #fabd2f; --crit: #fb4934; --good: #b8bb26;
+}
+:root[data-theme="solarized"] {
+  --surface: #002b36; --ink: #eee8d5; --ink-2: #93a1a1; --ink-3: #586e75;
+  --track: #073642; --accent: #268bd2; --warn: #b58900; --crit: #dc322f; --good: #859900;
+}
+:root[data-theme="solarized-light"] { color-scheme: light;
+  --surface: #fdf6e3; --ink: #073642; --ink-2: #586e75; --ink-3: #93a1a1;
+  --track: #eee8d5; --accent: #268bd2; --warn: #b58900; --crit: #dc322f; --good: #859900;
+}
+:root[data-theme="monokai"] {
+  --surface: #272822; --ink: #f8f8f2; --ink-2: #cfcfc2; --ink-3: #75715e;
+  --track: #3e3d32; --accent: #66d9ef; --warn: #e6db74; --crit: #f92672; --good: #a6e22e;
+}
+:root[data-theme="catppuccin"] {
+  --surface: #1e1e2e; --ink: #cdd6f4; --ink-2: #a6adc8; --ink-3: #6c7086;
+  --track: #313244; --accent: #cba6f7; --warn: #f9e2af; --crit: #f38ba8; --good: #a6e3a1;
+}
+:root[data-theme="tokyo-night"] {
+  --surface: #1a1b26; --ink: #c0caf5; --ink-2: #a9b1d6; --ink-3: #565f89;
+  --track: #292e42; --accent: #7aa2f7; --warn: #e0af68; --crit: #f7768e; --good: #9ece6a;
+}
+:root[data-theme="one-dark"] {
+  --surface: #282c34; --ink: #abb2bf; --ink-2: #9da5b4; --ink-3: #5c6370;
+  --track: #3e4451; --accent: #61afef; --warn: #e5c07b; --crit: #e06c75; --good: #98c379;
+}
+:root[data-theme="rose-pine"] {
+  --surface: #191724; --ink: #e0def4; --ink-2: #908caa; --ink-3: #6e6a86;
+  --track: #26233a; --accent: #c4a7e7; --warn: #f6c177; --crit: #eb6f92; --good: #9ccfd8;
+}
+:root[data-theme="everforest"] {
+  --surface: #2d353b; --ink: #d3c6aa; --ink-2: #9da9a0; --ink-3: #859289;
+  --track: #3d484d; --accent: #7fbbb3; --warn: #dbbc7f; --crit: #e67e80; --good: #a7c080;
+}
+:root[data-theme="matrix"] {
+  --surface: #000000; --ink: #d0ffd0; --ink-2: #7fd87f; --ink-3: #3f8f3f;
+  --track: #0f2a0f; --accent: #00ff41; --warn: #ffb000; --crit: #ff3030; --good: #00ff41;
+}
+:root[data-theme="amber"] {
+  --surface: #000000; --ink: #ffd27f; --ink-2: #d9a84f; --ink-3: #8c6d2f;
+  --track: #2a1f08; --accent: #ffb000; --warn: #ff6a00; --crit: #ff2020; --good: #ffb000;
+}
+:root[data-theme="cyberpunk"] {
+  --surface: #0b0b1a; --ink: #f0f0ff; --ink-2: #b0b0d0; --ink-3: #6a6a8a;
+  --track: #1e1e3a; --accent: #ff2bd6; --warn: #ffe600; --crit: #ff3b3b; --good: #2bff88;
+}
+:root[data-theme="ocean"] {
+  --surface: #0a1929; --ink: #e3f2fd; --ink-2: #a8c4dc; --ink-3: #5f7f99;
+  --track: #173149; --accent: #29b6f6; --warn: #ffb300; --crit: #ef5350; --good: #66bb6a;
+}
+:root[data-theme="emerald"] {
+  --surface: #000000; --ink: #ffffff; --ink-2: #b9b8b0; --ink-3: #7a7973;
+  --track: #262624; --accent: #2ecc71; --warn: #f1c40f; --crit: #e74c3c; --good: #2ecc71;
+}
+:root[data-theme="violet"] {
+  --surface: #000000; --ink: #ffffff; --ink-2: #b9b8b0; --ink-3: #7a7973;
+  --track: #262624; --accent: #a970ff; --warn: #fab219; --crit: #d03b3b; --good: #0ca30c;
+}
+:root[data-theme="sunset"] {
+  --surface: #1a1020; --ink: #ffeef0; --ink-2: #d9b8c4; --ink-3: #8a6e7a;
+  --track: #2e1a33; --accent: #ff6b9d; --warn: #ffb347; --crit: #ff3b3b; --good: #3ddc84;
+}
+:root[data-theme="slate"] {
+  --surface: #0f172a; --ink: #f1f5f9; --ink-2: #cbd5e1; --ink-3: #64748b;
+  --track: #1e293b; --accent: #94a3b8; --warn: #f59e0b; --crit: #ef4444; --good: #22c55e;
+}
+:root[data-theme="high-contrast"] {
+  --surface: #000000; --ink: #ffffff; --ink-2: #ffffff; --ink-3: #d0d0d0;
+  --track: #303030; --accent: #ffff00; --warn: #ff8c00; --crit: #ff0000; --good: #00ff00;
+}
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; background: var(--surface); color: var(--ink); overflow: hidden; }
 body { display: flex; flex-direction: column; padding: var(--pad); gap: calc(var(--u) * 2); font-variant-numeric: tabular-nums; }
