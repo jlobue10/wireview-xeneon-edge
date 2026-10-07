@@ -21,6 +21,23 @@
   --radius: calc(var(--u) * 1.5);
   font-family: "Segoe UI", "Open Sans", system-ui, -apple-system, sans-serif;
 }
+
+/* Optional themes, chosen with ?theme=<name> (wireview.js sets data-theme).
+ * Only the colour tokens change; every theme keeps its status colours apart
+ * from the accent, and the text always says what a colour means.
+ * The same palettes exist in wireview-nexus (--theme). */
+:root[data-theme="corsair"] { --accent: #f2c400; --warn: #f08e33; }
+:root[data-theme="ice"] { --accent: #38bdf8; }
+:root[data-theme="mono"] { --accent: #e6e6e6; --track: #2a2a2a; }
+:root[data-theme="nord"] {
+  --surface: #2e3440; --ink: #eceff4; --ink-2: #d8dee9; --ink-3: #8f97a6;
+  --track: #3b4252; --accent: #88c0d0; --warn: #ebcb8b; --crit: #bf616a; --good: #a3be8c;
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --surface: #f4f4f2; --ink: #111111; --ink-2: #4a4a46; --ink-3: #7a7973;
+  --track: #d9d8d3; --accent: #d9741a; --warn: #b8860b; --crit: #c62828; --good: #2e7d32;
+}
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; background: var(--surface); color: var(--ink); overflow: hidden; }
 body { display: flex; flex-direction: column; padding: var(--pad); gap: calc(var(--u) * 2); font-variant-numeric: tabular-nums; }

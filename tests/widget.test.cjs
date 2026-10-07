@@ -7,8 +7,9 @@ const script = fs.readFileSync(require('node:path').join(__dirname, '../docs/com
 function widget(url = 'http://localhost:8765/?interval=1000') {
   let now = 0, serial = 0;
   const timers = new Map(), listeners = new Map(), requests = [], updates = [];
+  const attrs = {};
   const document = {
-    documentElement: { style: { setProperty() {} }, classList: { add() {} } },
+    documentElement: { style: { setProperty() {} }, classList: { add() {} }, setAttribute(k, v) { attrs[k] = v; } },
     visibilityState: 'visible',
     addEventListener(name, cb) { listeners.set(name, [...(listeners.get(name) || []), cb]); },
   };
@@ -25,7 +26,7 @@ function widget(url = 'http://localhost:8765/?interval=1000') {
   const api = ctx.window.WireView;
   const drain = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); };
   return {
-    api, requests, updates, timers,
+    api, requests, updates, timers, attrs,
     start() { api.start((data, error) => updates.push({ data, problem: api.problemText(data, error) })); },
     async reply(i, data = { ok: true, age_s: 0, served_at: (1790000000000 + now) / 1000 }) {
       requests[i].resolve({ ok: true, json: async () => data }); await drain();
@@ -52,6 +53,20 @@ test('local pages follow their origin, hosted pages retain the loopback default'
   }
   assert.equal(widget('https://jlobue10.github.io/wireview-xeneon-edge/combined/').api.cfg.host, 'http://localhost:8765');
   assert.equal(widget('http://localhost:9000/?host=http://localhost:9999/').api.cfg.host, 'http://localhost:9999');
+});
+
+test('a known theme is applied through data-theme, unknown names and the default leave it alone', () => {
+  for (const name of ['corsair', 'ice', 'mono', 'nord', 'light']) {
+    const w = widget('http://localhost:8765/total-power/?theme=' + name);
+    assert.equal(w.api.cfg.theme, name);
+    assert.equal(w.attrs['data-theme'], name);
+  }
+  assert.equal(widget('http://localhost:8765/total-power/?theme=NORD').attrs['data-theme'], 'nord');
+  for (const url of ['http://localhost:8765/total-power/', 'http://localhost:8765/total-power/?theme=plaid', 'http://localhost:8765/?theme=']) {
+    const w = widget(url);
+    assert.equal(w.api.cfg.theme, 'grizzly');
+    assert.equal(w.attrs['data-theme'], undefined);
+  }
 });
 
 test('both connector temperatures are labelled, missing ones shown as --', () => {
