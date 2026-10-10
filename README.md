@@ -48,6 +48,13 @@ Re-running the installer updates the executable and restarts the bridge. It leav
 itself next to the executable, so `%LOCALAPPDATA%\wireview-xeneon-edge\install.ps1 -Uninstall`
 removes the executable and installer while preserving any files you added.
 
+**To use the official Thermal Grizzly WireView app or update the WireView firmware**, stop the
+bridge first: open Task Scheduler, select "WireView Bridge" and choose **End** (or run
+`Stop-ScheduledTask -TaskName 'WireView Bridge'` in PowerShell). The bridge holds the WireView's
+USB serial port, so until it is stopped the official app shows no data and a firmware update
+cannot talk to the device. Afterwards, **Run** the task again in Task Scheduler (or
+`Start-ScheduledTask -TaskName 'WireView Bridge'`); it also comes back on its own at the next logon.
+
 For an older custom install without an ownership marker, pass `-Uninstall -Dir <install folder>`.
 In-place source or manually downloaded folders keep their files when no `-Dir` is given.
 
