@@ -526,6 +526,19 @@ fn binary_arguments() {
     assert_eq!(code, Some(2), "{err}");
     assert!(err.contains("cannot create the log file"), "{err}");
     std::fs::remove_file(unwritable).unwrap();
+    // A bridge that cannot bind leaves no header-only CSV behind: its
+    // scheduled task restarts it every minute.
+    let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = taken.local_addr().unwrap().port().to_string();
+    let logs = temp("csv-unbound");
+    let (code, _, err) = run(&["--csv-log", logs.to_str().unwrap(), "--port", &port]);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("cannot bind"), "{err}");
+    assert!(
+        std::fs::read_dir(&logs).unwrap().next().is_none(),
+        "a CSV file was left behind by a bridge that could not bind"
+    );
+    let _ = std::fs::remove_dir_all(&logs);
 }
 
 #[test]

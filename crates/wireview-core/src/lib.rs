@@ -10,6 +10,8 @@
 //!   the real bridge from any other process that owns the port.
 //! * [`csvlog`]  writes the readings to CSV files in the format the Thermal
 //!   Grizzly WireView app exports (off unless asked for).
+//! * [`watchdog`] ends the process when a device call never returns, so the
+//!   scheduled task can restart it.
 
 pub mod auth;
 pub mod console;
@@ -19,12 +21,35 @@ pub mod hwinfo;
 pub mod readings;
 pub mod serial;
 pub mod source;
+pub mod watchdog;
 
 pub use csvlog::CsvLog;
 pub use readings::{Device, Faults, Pin, Readings};
 pub use source::{DEFAULT_BRIDGE_URL, Reader, Source};
+pub use watchdog::Watchdog;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// `println!` that cannot panic. Started headless, the daemons write stdout
+/// to a log file ([`console::attach`]); `println!` panics when such a write
+/// fails (full disk), which would end a daemon, or the watchdog thread,
+/// over a log line.
+#[macro_export]
+macro_rules! say {
+    ($($arg:tt)*) => {{
+        use ::std::io::Write as _;
+        let _ = writeln!(::std::io::stdout(), $($arg)*);
+    }};
+}
+
+/// `eprintln!` that cannot panic; see [`say!`].
+#[macro_export]
+macro_rules! say_err {
+    ($($arg:tt)*) => {{
+        use ::std::io::Write as _;
+        let _ = writeln!(::std::io::stderr(), $($arg)*);
+    }};
+}
 
 /// Seconds since the Unix epoch, as the JSON timestamps use.
 pub fn unix_time() -> f64 {

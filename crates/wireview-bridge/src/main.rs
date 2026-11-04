@@ -20,7 +20,7 @@ use clap::Parser;
 use wireview_bridge::{Config, DEFAULT_PORT, PAGES_ORIGIN, Statics, VERSION, start};
 use wireview_core::auth::SecretStore;
 use wireview_core::csvlog::{self, CsvLog};
-use wireview_core::{Reader, Source};
+use wireview_core::{Reader, Source, watchdog};
 
 fn source(s: &str) -> Result<Source, String> {
     match s.parse()? {
@@ -68,6 +68,11 @@ struct Args {
     /// Seconds between CSV rows (1-86400)
     #[arg(long, value_name = "SECONDS", default_value = "60", value_parser = csvlog::parse_interval, requires = "csv_log")]
     csv_interval: Duration,
+
+    /// Exit (status 3, for the scheduled task to restart) when a device read
+    /// has not returned after this many seconds; 0 turns the watchdog off
+    #[arg(long, value_name = "SECONDS", default_value = "20", value_parser = watchdog::parse_limit)]
+    watchdog: Duration,
 }
 
 fn main() -> ExitCode {
@@ -77,7 +82,7 @@ fn main() -> ExitCode {
     let statics = match (&args.static_dir, args.no_static) {
         (_, true) => Statics::None,
         (Some(dir), _) if !dir.is_dir() => {
-            eprintln!("--static-dir {}: not a directory", dir.display());
+            wireview_core::say_err!("--static-dir {}: not a directory", dir.display());
             return ExitCode::from(2);
         }
         (Some(dir), _) => Statics::Dir(dir.clone()),
@@ -87,19 +92,21 @@ fn main() -> ExitCode {
     let secrets = SecretStore::default();
     let secret = secrets.get(true);
     if secret.is_none() {
-        println!(
+        wireview_core::say!(
             "WARNING: cannot create the bridge secret at {}; other programs will not trust this bridge \
              and will keep the COM port to themselves.",
             secrets.path().display()
         );
     }
 
+    // Created before the port is bound, so a bad log folder is refused
+    // before anything listens; attached to the bridge only after the bind.
     let csv_log = match &args.csv_log {
         None => None,
         Some(dir) => match CsvLog::create(dir, args.csv_interval) {
             Ok(log) => Some(log),
             Err(e) => {
-                eprintln!("--csv-log {}: cannot create the log file: {e}", dir.display());
+                wireview_core::say_err!("--csv-log {}: cannot create the log file: {e}", dir.display());
                 return ExitCode::from(2);
             }
         },
@@ -111,35 +118,43 @@ fn main() -> ExitCode {
     config.allow_origins = args.allow_origin;
     config.statics = statics.clone();
     config.secret = secret;
-    if let Some(log) = &csv_log {
-        println!("CSV log: {} (a row every {} s)", log.path().display(), log.interval().as_secs());
-    }
-    config.csv_log = csv_log;
+    config.watchdog = (!args.watchdog.is_zero()).then_some(args.watchdog);
 
-    let bridge = match start(config) {
+    let mut bridge = match start(config) {
         Ok(b) => b,
         Err(e) => {
-            eprintln!("{e}");
+            wireview_core::say_err!("{e}");
+            // A bridge that cannot bind is restarted by its scheduled task
+            // every minute; each try must not leave a header-only CSV behind.
+            if let Some(log) = csv_log {
+                let path = log.path().to_path_buf();
+                drop(log);
+                let _ = std::fs::remove_file(path);
+            }
             return ExitCode::FAILURE;
         }
     };
+    if let Some(log) = csv_log {
+        wireview_core::say!("CSV log: {} (a row every {} s)", log.path().display(), log.interval().as_secs());
+        bridge.log_csv(log);
+    }
     if !matches!(args.bind.as_str(), "127.0.0.1" | "localhost" | "::1" | "[::1]") {
-        println!(
+        wireview_core::say!(
             "WARNING: --bind {} makes the readings and widgets reachable from that network; \
              the Host check is off. Prefer the default loopback bind.",
             args.bind
         );
     }
     for addr in bridge.addrs() {
-        println!("WireView bridge {VERSION} listening on http://{addr}/api/wireview");
+        wireview_core::say!("WireView bridge {VERSION} listening on http://{addr}/api/wireview");
     }
     match &statics {
         Statics::None => {}
-        Statics::Embedded => println!(
+        Statics::Embedded => wireview_core::say!(
             "Serving the built-in widgets at http://localhost:{}/ (also hosted at {PAGES_ORIGIN})",
             args.port
         ),
-        Statics::Dir(d) => println!("Serving widgets from {} at http://localhost:{}/", d.display(), args.port),
+        Statics::Dir(d) => wireview_core::say!("Serving widgets from {} at http://localhost:{}/", d.display(), args.port),
     }
     bridge.wait();
     ExitCode::SUCCESS

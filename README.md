@@ -29,8 +29,9 @@ powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/jlo
 
 It downloads `wireview-bridge.exe` from the latest release to
 `%LOCALAPPDATA%\wireview-xeneon-edge`, checks its SHA-256, registers a per-user Scheduled Task
-named "WireView Bridge" that runs the bridge at logon (no admin rights needed), and starts it.
-A Python-based 1.x install in that folder is replaced. Then:
+named "WireView Bridge" that runs the bridge at logon and starts it again within five minutes
+should it ever exit (no admin rights needed), and starts it. A Python-based 1.x install in that
+folder is replaced. Then:
 
 1. **Close the Thermal Grizzly WireView app** and turn off its auto-start. Only one program
    can hold the WireView's USB serial port.
@@ -241,10 +242,25 @@ When there is no reading, `ok` is false and `status` / `hint` say why (for examp
 `{"ok":true}`. `served_at` is when the bridge produced the reply; with `?nonce=<hex>` the
 `X-WireView-Auth` header authenticates it (see above). Options: `--port`, `--bind`,
 `--no-static`, `--static-dir`, `--source`, `--serial-port`, `--allow-origin`, `--csv-log`,
-`--csv-interval`, `--version`.
+`--csv-interval`, `--watchdog`, `--version`.
 `--bind` other than loopback exposes the readings and widgets to that network and turns the
 `Host` check off; leave it at the default unless you mean that. Set `WIREVIEW_BRIDGE_LOG=1` to
 log each request.
+
+## If the widget goes blank
+
+Started by the Scheduled Task the bridge has no console, so its messages go to
+`%LOCALAPPDATA%\wireview\wireview-bridge.log` (each start adds a dated line; past 1 MiB the
+file moves to `.old.log`). A blank iFrame or "cannot connect to host" in iCUE means nothing
+answered on port 8765: the log says whether the bridge exited and why (port in use, COM port
+problems). The task starts an exited bridge again, within a minute after a failure exit and
+within five minutes otherwise, and a read that never returns, which would otherwise leave a
+live bridge answering nothing, ends the process after `--watchdog` seconds (default 20, `0`
+turns it off) so the task restarts it. (A call stuck inside a driver that will not cancel can
+hold even an exiting process; the log still names the call, and unplugging the WireView
+releases it.)
+After the bridge is back, iCUE's embedded browser may need the widget reloaded, or iCUE
+restarted, before the iFrame shows data again.
 
 ## CSV log
 

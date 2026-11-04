@@ -30,7 +30,7 @@ use std::time::{Duration, Instant};
 
 use socket2::{Domain, Protocol, Socket, Type};
 use wireview_core::auth::{AUTH_HEADER, bridge_sign, valid_nonce};
-use wireview_core::{CsvLog, Reader, Readings, unix_time};
+use wireview_core::{CsvLog, Reader, Readings, Watchdog, unix_time, watchdog};
 
 use crate::http::{ReadError, Repeated, Request, Response, read_request};
 use crate::statics::Found;
@@ -61,6 +61,11 @@ pub struct Config {
     pub request_timeout: Duration,
     /// Append the readings to this CSV log at its interval.
     pub csv_log: Option<CsvLog>,
+    /// End the process when a device read runs longer than this (`None`:
+    /// never). A read that never returns would otherwise hold the readings
+    /// lock, queue every request behind it, fill the worker slots and leave a
+    /// live process that answers nothing, which no task restart notices.
+    pub watchdog: Option<Duration>,
 }
 
 impl Config {
@@ -74,6 +79,7 @@ impl Config {
             secret: None,
             request_timeout: REQUEST_TIMEOUT,
             csv_log: None,
+            watchdog: Some(watchdog::DEFAULT_LIMIT),
         }
     }
 }
@@ -120,6 +126,21 @@ struct State {
     workers: AtomicUsize,
     stopping: AtomicBool,
     log_requests: bool,
+    watchdog: Option<Watchdog>,
+}
+
+impl State {
+    /// Read the device under the watchdog: a read that never returns ends
+    /// the process instead of wedging it.
+    fn read_device(&self) -> Readings {
+        let _watched = self.watchdog.as_ref().map(|w| w.watch("device read"));
+        // A reader bug must not take the server down.
+        catch_unwind(AssertUnwindSafe(|| self.reader.read())).unwrap_or_else(|_| {
+            let mut r = Readings::problem(self.reader.source().as_str(), "Reader error", "the reader failed unexpectedly");
+            r.error = r.hint.clone();
+            r
+        })
+    }
 }
 
 /// A running bridge.
@@ -133,6 +154,17 @@ impl Bridge {
     /// The addresses being listened on.
     pub fn addrs(&self) -> &[SocketAddr] {
         &self.addrs
+    }
+
+    /// Append the readings to `log` at its interval, from its own thread.
+    /// The daemon attaches its log here after a successful bind (and
+    /// removes the fresh file when the bind fails), so a bridge restarted
+    /// every minute because it cannot bind leaves no header-only CSV behind
+    /// each try. `Config::csv_log` does the same at start for callers that
+    /// have no failure path to worry about.
+    pub fn log_csv(&mut self, log: CsvLog) {
+        let state = Arc::clone(&self.state);
+        self.threads.push(thread::spawn(move || csv_loop(&state, log)));
     }
 
     pub fn port(&self) -> u16 {
@@ -290,6 +322,7 @@ pub fn start(config: Config) -> Result<Bridge, StartError> {
         workers: AtomicUsize::new(0),
         stopping: AtomicBool::new(false),
         log_requests: std::env::var_os(LOG_ENV).is_some_and(|v| !v.is_empty()),
+        watchdog: config.watchdog.map(Watchdog::start),
     });
 
     let mut addrs = Vec::new();
@@ -321,16 +354,21 @@ fn csv_loop(state: &State, mut log: CsvLog) {
             thread::sleep(wait.min(Duration::from_millis(250)));
             continue;
         }
-        let data = catch_unwind(AssertUnwindSafe(|| state.reader.read()))
-            .unwrap_or_else(|_| Readings::problem(state.reader.source().as_str(), "Reader error", "the reader failed unexpectedly"));
+        let data = state.read_device();
         if let Err(e) = log.record(&data) {
             if last_warn.is_none_or(|t| t.elapsed() >= Duration::from_secs(60)) {
-                println!("csv log: cannot write {}: {e}; retrying", log.path().display());
+                wireview_core::say!("csv log: cannot write {}: {e}; retrying", log.path().display());
                 last_warn = Some(Instant::now());
             }
             // record() only stamps its schedule on success, so without this the
-            // loop would spin at full speed on every failing write.
-            thread::sleep(log.interval().min(Duration::from_secs(5)).max(Duration::from_millis(250)));
+            // loop would spin at full speed on every failing write. In slices,
+            // so a shutdown is not held up by the whole pause.
+            let mut left = log.interval().min(Duration::from_secs(5)).max(Duration::from_millis(250));
+            while !left.is_zero() && !state.stopping.load(Ordering::SeqCst) {
+                let step = left.min(Duration::from_millis(250));
+                thread::sleep(step);
+                left -= step;
+            }
         }
     }
 }
@@ -391,7 +429,7 @@ fn serve(state: &State, mut stream: TcpStream) {
     };
     if state.log_requests {
         let peer = stream.peer_addr().map_or("?".to_string(), |a| a.to_string());
-        eprintln!("{peer} \"{line}\" {}", response.status);
+        wireview_core::say_err!("{peer} \"{line}\" {}", response.status);
     }
     let _ = response.write_to(&mut stream, &format!("WireViewBridge/{VERSION}"), deadline);
 }
@@ -478,18 +516,16 @@ fn readings_json(state: &State) -> Arc<Vec<u8>> {
     if cache.at.is_some_and(|at| at.elapsed() <= CACHE) {
         return Arc::clone(&cache.body);
     }
-    // A reader bug must not take the server down.
-    let mut data = catch_unwind(AssertUnwindSafe(|| state.reader.read())).unwrap_or_else(|_| {
-        let mut r = Readings::problem(state.reader.source().as_str(), "Reader error", "the reader failed unexpectedly");
-        r.error = r.hint.clone();
-        r
-    });
+    // The widgets poll every second: a good place to keep the headless
+    // log file from growing without bound.
+    wireview_core::console::maintain();
+    let mut data = state.read_device();
     if let Some(dev) = data.device.as_mut() {
         dev.uid = None; // never served
     }
     let src = data.describe_source();
     if cache.last_source.as_deref() != Some(&src) {
-        println!("readings: {src}");
+        wireview_core::say!("readings: {src}");
         cache.last_source = Some(src);
     }
     data.served_at = Some(unix_time());
