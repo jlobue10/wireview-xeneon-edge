@@ -6,7 +6,13 @@ if ($Child) {
     # The task reports as present so the Stop/Unregister paths run for real, and the
     # Register call is captured: the audit regression (nothing restarting an exited
     # bridge) is invisible unless the trigger and settings arguments are asserted.
-    function Get-ScheduledTask { return [pscustomobject]@{ TaskName = 'WireView Bridge'; State = 'Ready' } }   # no param(): -TaskName/-ErrorAction arrive in $args
+    # The task must report as present so Stop/Unregister paths run; no param(): -TaskName/-ErrorAction arrive in $args.
+    function Get-ScheduledTask {
+        for ($i = 0; $i -lt $args.Count; $i++) {
+            if ("$($args[$i])" -ieq '-TaskName' -and $i + 1 -lt $args.Count) { return [pscustomobject]@{ TaskName = $args[$i + 1]; State = 'Ready' } }
+        }
+        return [pscustomobject]@{ State = 'Ready' }
+    }
     function Get-CimInstance { return @() }
     function Stop-ScheduledTask { Set-Content -LiteralPath (Join-Path $Directory 'task-stopped.txt') -Value ($args -join ' ') }
     function Stop-Process {}
