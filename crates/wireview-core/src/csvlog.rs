@@ -279,8 +279,12 @@ impl CsvLog {
 
     /// Write a row now, whatever the interval.
     pub fn write_row(&mut self, r: &Readings, at: LocalTime) -> io::Result<()> {
-        self.file.write_all(row(r, at).as_bytes())?;
-        self.file.write_all(b"\r\n")?;
+        // One write for row and line ending: a write that fails part-way is
+        // retried on the next tick, and two writes could leave a row without
+        // its ending glued to the next one.
+        let mut line = row(r, at);
+        line.push_str("\r\n");
+        self.file.write_all(line.as_bytes())?;
         self.file.flush()?;
         self.last = Some(Instant::now());
         self.rows += 1;
