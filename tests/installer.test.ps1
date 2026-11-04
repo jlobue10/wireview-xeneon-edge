@@ -14,11 +14,17 @@ if ($Child) {
         return [pscustomobject]@{ State = 'Ready' }
     }
     function Get-CimInstance { return @() }
-    function Stop-ScheduledTask { Set-Content -LiteralPath (Join-Path $Directory 'task-stopped.txt') -Value ($args -join ' ') }
+    # The mocks record what they were called with under $Directory. The installer stops a
+    # running daemon before it creates the install folder, so the recorder makes the folder.
+    function Record([string]$file, [string]$text) {
+        New-Item -ItemType Directory -Force -Path $Directory | Out-Null
+        Set-Content -LiteralPath (Join-Path $Directory $file) -Value $text
+    }
+    function Stop-ScheduledTask { Record 'task-stopped.txt' ($args -join ' ') }
     function Stop-Process {}
-    function Unregister-ScheduledTask { Set-Content -LiteralPath (Join-Path $Directory 'task-unregistered.txt') -Value ($args -join ' ') }
-    function Start-ScheduledTask { Set-Content -LiteralPath (Join-Path $Directory 'task-started.txt') -Value ($args -join ' ') }
-    function New-ScheduledTaskAction { Set-Content -LiteralPath (Join-Path $Directory 'task-arguments.txt') -Value ($args -join ' ') }
+    function Unregister-ScheduledTask { Record 'task-unregistered.txt' ($args -join ' ') }
+    function Start-ScheduledTask { Record 'task-started.txt' ($args -join ' ') }
+    function New-ScheduledTaskAction { Record 'task-arguments.txt' ($args -join ' ') }
     # Triggers and settings must be objects: install.ps1 passes them to Register-ScheduledTask.
     function New-ScheduledTaskTrigger { return [pscustomobject]@{ CreationArgs = ($args -join ' ') } }
     function New-ScheduledTaskPrincipal {}
@@ -31,13 +37,14 @@ if ($Child) {
     }
     function Register-ScheduledTask {
         param($TaskName, $Action, $Trigger, $Principal, $Settings, $Description, [switch]$Force)
-        [pscustomobject]@{
+        $json = [pscustomobject]@{
             TaskName = $TaskName
             TriggerArgs = @($Trigger | ForEach-Object { $_.CreationArgs })
             RestartCount = $Settings.RestartCount
             ExecutionTimeLimit = $Settings.ExecutionTimeLimit
             Force = [bool]$Force
-        } | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $Directory 'task-registration.json')
+        } | ConvertTo-Json -Compress
+        Record 'task-registration.json' $json
     }
     function Unblock-File {}
     function Invoke-WebRequest {
