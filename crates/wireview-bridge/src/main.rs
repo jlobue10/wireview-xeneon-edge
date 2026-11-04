@@ -20,7 +20,7 @@ use clap::Parser;
 use wireview_bridge::{Config, DEFAULT_PORT, PAGES_ORIGIN, Statics, VERSION, start};
 use wireview_core::auth::SecretStore;
 use wireview_core::csvlog::{self, CsvLog};
-use wireview_core::{Reader, Source};
+use wireview_core::{Reader, Source, watchdog};
 
 fn source(s: &str) -> Result<Source, String> {
     match s.parse()? {
@@ -68,6 +68,11 @@ struct Args {
     /// Seconds between CSV rows (1-86400)
     #[arg(long, value_name = "SECONDS", default_value = "60", value_parser = csvlog::parse_interval, requires = "csv_log")]
     csv_interval: Duration,
+
+    /// Exit (status 3, for the scheduled task to restart) when a device read
+    /// has not returned after this many seconds; 0 turns the watchdog off
+    #[arg(long, value_name = "SECONDS", default_value = "20", value_parser = watchdog::parse_limit)]
+    watchdog: Duration,
 }
 
 fn main() -> ExitCode {
@@ -115,6 +120,7 @@ fn main() -> ExitCode {
         println!("CSV log: {} (a row every {} s)", log.path().display(), log.interval().as_secs());
     }
     config.csv_log = csv_log;
+    config.watchdog = (!args.watchdog.is_zero()).then_some(args.watchdog);
 
     let bridge = match start(config) {
         Ok(b) => b,
