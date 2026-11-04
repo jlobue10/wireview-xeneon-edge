@@ -157,8 +157,11 @@ impl Bridge {
     }
 
     /// Append the readings to `log` at its interval, from its own thread.
-    /// Called after a successful start, so a bridge that cannot bind (the
-    /// restart loop that follows) leaves no header-only CSV behind each try.
+    /// The daemon attaches its log here after a successful bind (and
+    /// removes the fresh file when the bind fails), so a bridge restarted
+    /// every minute because it cannot bind leaves no header-only CSV behind
+    /// each try. `Config::csv_log` does the same at start for callers that
+    /// have no failure path to worry about.
     pub fn log_csv(&mut self, log: CsvLog) {
         let state = Arc::clone(&self.state);
         self.threads.push(thread::spawn(move || csv_loop(&state, log)));

@@ -99,6 +99,19 @@ fn main() -> ExitCode {
         );
     }
 
+    // Created before the port is bound, so a bad log folder is refused
+    // before anything listens; attached to the bridge only after the bind.
+    let csv_log = match &args.csv_log {
+        None => None,
+        Some(dir) => match CsvLog::create(dir, args.csv_interval) {
+            Ok(log) => Some(log),
+            Err(e) => {
+                wireview_core::say_err!("--csv-log {}: cannot create the log file: {e}", dir.display());
+                return ExitCode::from(2);
+            }
+        },
+    };
+
     let mut config = Config::new(Reader::new(args.source, args.serial_port, None));
     config.port = args.port;
     config.bind = args.bind.clone();
@@ -111,23 +124,19 @@ fn main() -> ExitCode {
         Ok(b) => b,
         Err(e) => {
             wireview_core::say_err!("{e}");
+            // A bridge that cannot bind is restarted by its scheduled task
+            // every minute; each try must not leave a header-only CSV behind.
+            if let Some(log) = csv_log {
+                let path = log.path().to_path_buf();
+                drop(log);
+                let _ = std::fs::remove_file(path);
+            }
             return ExitCode::FAILURE;
         }
     };
-    // Only once the port is bound: a bridge that cannot start is restarted
-    // by its scheduled task every minute, and each try must not leave a new
-    // header-only CSV file behind.
-    if let Some(dir) = &args.csv_log {
-        match CsvLog::create(dir, args.csv_interval) {
-            Ok(log) => {
-                wireview_core::say!("CSV log: {} (a row every {} s)", log.path().display(), log.interval().as_secs());
-                bridge.log_csv(log);
-            }
-            Err(e) => {
-                wireview_core::say_err!("--csv-log {}: cannot create the log file: {e}", dir.display());
-                return ExitCode::from(2);
-            }
-        }
+    if let Some(log) = csv_log {
+        wireview_core::say!("CSV log: {} (a row every {} s)", log.path().display(), log.interval().as_secs());
+        bridge.log_csv(log);
     }
     if !matches!(args.bind.as_str(), "127.0.0.1" | "localhost" | "::1" | "[::1]") {
         wireview_core::say!(
