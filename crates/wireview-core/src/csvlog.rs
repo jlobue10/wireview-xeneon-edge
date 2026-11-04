@@ -210,17 +210,26 @@ impl CsvLog {
         let interval = interval.clamp(MIN_INTERVAL, MAX_INTERVAL);
         fs::create_dir_all(dir)?;
         let stamp = at.file_stamp();
-        let mut n = 0;
+        let pid = std::process::id();
+        // Candidate names in order: log-<stamp>.csv, then -1 .. -100, then the same with
+        // the process id. Past 100 same-second starts (a crash loop under a restart
+        // trigger) a pid-suffixed name is still fresh, so keep logging instead of
+        // failing to start over a name collision.
+        let mut n: u32 = 0;
         let (path, file) = loop {
             let name = if n == 0 {
                 format!("log-{stamp}.csv")
-            } else {
+            } else if n <= 100 {
                 format!("log-{stamp}-{n}.csv")
+            } else if n == 101 {
+                format!("log-{stamp}-p{pid}.csv")
+            } else {
+                format!("log-{stamp}-p{pid}-{}.csv", n - 101)
             };
             let path = dir.join(name);
             match OpenOptions::new().write(true).create_new(true).open(&path) {
                 Ok(f) => break (path, f),
-                Err(e) if e.kind() == io::ErrorKind::AlreadyExists && n < 100 => n += 1,
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists && n < 1101 => n += 1,
                 Err(e) => return Err(e),
             }
         };
@@ -270,8 +279,12 @@ impl CsvLog {
 
     /// Write a row now, whatever the interval.
     pub fn write_row(&mut self, r: &Readings, at: LocalTime) -> io::Result<()> {
-        self.file.write_all(row(r, at).as_bytes())?;
-        self.file.write_all(b"\r\n")?;
+        // One write for row and line ending: a write that fails part-way is
+        // retried on the next tick, and two writes could leave a row without
+        // its ending glued to the next one.
+        let mut line = row(r, at);
+        line.push_str("\r\n");
+        self.file.write_all(line.as_bytes())?;
         self.file.flush()?;
         self.last = Some(Instant::now());
         self.rows += 1;
@@ -426,6 +439,31 @@ mod tests {
         let second = CsvLog::create_at(&dir.join("nested"), Duration::from_secs(60), at()).unwrap();
         assert_eq!(second.path().file_name().unwrap(), "log-20260101-020502-1.csv");
         drop(second);
+        drop(log);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn past_100_same_second_collisions_fall_back_to_a_pid_name() {
+        // A crash loop under the installer's restart trigger can blow through the
+        // -1 .. -100 suffixes; a pid-suffixed name must keep logging, not Err.
+        let dir = std::env::temp_dir().join(format!("wireview-csvlog-pid-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        for n in 0..=100 {
+            let name = if n == 0 {
+                "log-20260101-020502.csv".to_string()
+            } else {
+                format!("log-20260101-020502-{n}.csv")
+            };
+            fs::write(dir.join(name), "planted").unwrap();
+        }
+        let log = CsvLog::create_at(&dir, Duration::from_secs(60), at()).unwrap();
+        assert_eq!(
+            log.path().file_name().unwrap().to_string_lossy(),
+            format!("log-20260101-020502-p{}.csv", std::process::id())
+        );
+        assert_eq!(fs::read_to_string(dir.join("log-20260101-020502.csv")).unwrap(), "planted");
         drop(log);
         fs::remove_dir_all(&dir).unwrap();
     }
