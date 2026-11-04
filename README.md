@@ -246,9 +246,12 @@ Started by the Scheduled Task the bridge has no console, so its messages go to
 `%LOCALAPPDATA%\wireview\wireview-bridge.log` (each start adds a dated line; past 1 MiB the
 file moves to `.old.log`). A blank iFrame or "cannot connect to host" in iCUE means nothing
 answered on port 8765: the log says whether the bridge exited and why (port in use, COM port
-problems). The task restarts an exited bridge within a minute (five minutes at most), and a
-read that never returns, which would otherwise leave a live bridge answering nothing, ends the
-process after `--watchdog` seconds (default 20, `0` turns it off) so the task restarts it.
+problems). The task starts an exited bridge again, within a minute after a failure exit and
+within five minutes otherwise, and a read that never returns, which would otherwise leave a
+live bridge answering nothing, ends the process after `--watchdog` seconds (default 20, `0`
+turns it off) so the task restarts it. (A call stuck inside a driver that will not cancel can
+hold even an exiting process; the log still names the call, and unplugging the WireView
+releases it.)
 After the bridge is back, iCUE's embedded browser may need the widget reloaded, or iCUE
 restarted, before the iFrame shows data again.
 

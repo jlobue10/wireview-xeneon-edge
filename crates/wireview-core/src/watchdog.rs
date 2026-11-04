@@ -12,6 +12,11 @@
 //! checks four times a second that no guard has been alive longer than the
 //! limit; when one has, the process is ended with [`EXIT_CODE`] so the task
 //! scheduler starts a fresh one (`RestartCount` in the installers).
+//!
+//! Limit of the approach: a thread parked in a kernel I/O that its driver
+//! will not cancel keeps even an exiting process alive until the I/O
+//! completes or the device goes away. No user-mode program gets past that;
+//! the line printed before the exit still says which call it was.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, Weak};
