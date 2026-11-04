@@ -19,6 +19,11 @@ pub fn attach() {
     windows::attach();
 }
 
+/// The fallback log is rotated to `.old.log` at a start that finds it this
+/// large; with the daemons' throttled messages that is months of restarts.
+#[cfg(windows)]
+const MAX_LOG_BYTES: u64 = 1024 * 1024;
+
 /// Where the no-console fallback log goes: `LOCALAPPDATA\wireview\<exe>.log`,
 /// falling back to the temp dir when LOCALAPPDATA is unset. Split out and
 /// environment-injected so it is testable without Windows.
@@ -107,12 +112,17 @@ mod windows {
     }
 
     /// No console exists (Task Scheduler start): append stdout/stderr to a
-    /// per-executable log file so daemon messages survive the run. The
-    /// previous run is kept as `.old.log` (rotate once per start).
+    /// per-executable log file so daemon messages survive the run. Runs
+    /// accumulate in one file, each under a dated start line, so a restart
+    /// loop stays readable; past [`super::MAX_LOG_BYTES`] the file is
+    /// rotated to `.old.log` at the next start (at most two files).
     fn redirect_to_file() {
-        let path = log_path();
+        let path = super::log_path();
         let _ = std::fs::create_dir_all(path.parent().unwrap_or_else(|| std::path::Path::new(".")));
-        let _ = std::fs::rename(&path, path.with_extension("old.log"));
+        if std::fs::metadata(&path).is_ok_and(|m| m.len() >= super::MAX_LOG_BYTES) {
+            let _ = std::fs::rename(&path, path.with_extension("old.log"));
+        }
+        let mut redirected = false;
         // SAFETY: plain Win32 calls; every pointer passed is valid for the call.
         unsafe {
             let wide: Vec<u16> = path.to_string_lossy().encode_utf16().chain(std::iter::once(0)).collect();
@@ -132,8 +142,18 @@ mod windows {
                 );
                 if usable(h) {
                     SetStdHandle(which, h);
+                    redirected = true;
                 }
             }
+        }
+        if redirected {
+            // The daemons' own lines carry no time; one dated line per start
+            // is what makes a restart loop legible.
+            println!(
+                "---- started {} (pid {}) ----",
+                crate::csvlog::LocalTime::now().iso8601(),
+                std::process::id()
+            );
         }
     }
 }
