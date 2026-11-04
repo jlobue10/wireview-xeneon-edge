@@ -32,8 +32,10 @@ jobs:
       - name: Binary smoke
         shell: pwsh
         run: |
-          $out = (./target/release/wireview-bridge.exe --version) -join ' '
-          if ($LASTEXITCODE -ne 0) { throw "wireview-bridge.exe --version failed: $out" }
+          # A pipeline, not a plain assignment: for a GUI-subsystem exe pwsh otherwise
+          # neither waits nor captures, and $LASTEXITCODE stays null.
+          $out = (./target/release/wireview-bridge.exe --version | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0) { throw "wireview-bridge.exe --version failed (exit $LASTEXITCODE): $out" }
           if ($out -notlike "*$($env:GITHUB_REF_NAME.TrimStart('v'))*") { throw "version output does not match tag: $out" }
       - name: Collect files
         shell: pwsh
