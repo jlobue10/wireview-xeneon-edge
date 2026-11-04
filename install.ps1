@@ -45,7 +45,14 @@ $LegacyShortcut = if ($startup) { Join-Path $startup 'WireView Bridge.lnk' } els
 function Say($msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
 
 function Stop-Daemon {
-    Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue | Stop-ScheduledTask -ErrorAction SilentlyContinue
+    $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    if ($task) {
+        # Disable before stopping: the task's own 5-minute trigger could otherwise start the
+        # daemon again between this stop and the file replacement or removal that follows.
+        # Register-ScheduledTask -Force below writes a fresh, enabled definition.
+        $task | Disable-ScheduledTask -ErrorAction SilentlyContinue | Out-Null
+        $task | Stop-ScheduledTask -ErrorAction SilentlyContinue
+    }
     $target = Join-Path $Dir $Exe
     Get-CimInstance Win32_Process -Filter "Name = '$Exe'" |
         Where-Object { $_.ExecutablePath -and ($_.ExecutablePath -ieq $target) } |
@@ -226,4 +233,4 @@ Write-Host '                   http://localhost:8765/total-current/'
 Write-Host '                   http://localhost:8765/total-power/'
 if ($Log) { Write-Host "  CSV log      : $LogDir\log-<date>-<time>.csv, a row a minute (WireView app export format)" }
 else { Write-Host '  CSV log      : off   (install.ps1 -Log, or -Log -LogDir <folder>)' }
-Write-Host "  Manage       : Task Scheduler > '$TaskName'   |   uninstall: install.ps1 -Uninstall"
+Write-Host "  Manage       : Task Scheduler > '$TaskName' (Disable + End before using the WireView app)   |   uninstall: install.ps1 -Uninstall"

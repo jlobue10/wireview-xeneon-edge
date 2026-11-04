@@ -20,6 +20,7 @@ if ($Child) {
         New-Item -ItemType Directory -Force -Path $Directory | Out-Null
         Set-Content -LiteralPath (Join-Path $Directory $file) -Value $text
     }
+    function Disable-ScheduledTask { Record 'task-disabled.txt' ($args -join ' ') }
     function Stop-ScheduledTask { Record 'task-stopped.txt' ($args -join ' ') }
     function Stop-Process {}
     function Unregister-ScheduledTask { Record 'task-unregistered.txt' ($args -join ' ') }
@@ -119,6 +120,7 @@ try {
     Check ($reg.ExecutionTimeLimit -eq 'PT0S') "ExecutionTimeLimit should be PT0S, got $($reg.ExecutionTimeLimit)"
     Check ($reg.Force) 'Register-ScheduledTask should be called with -Force'
     Check (Test-Path -LiteralPath (Join-Path $managed 'task-stopped.txt')) 'install.ps1 did not stop a running instance before re-registering'
+    Check (Test-Path -LiteralPath (Join-Path $managed 'task-disabled.txt')) 'install.ps1 did not disable the task before replacing the executable (its own trigger could restart it)'
 
     # Without -NoStart the installer must start the task right away.
     $started = Join-Path $root 'downloaded-started'
