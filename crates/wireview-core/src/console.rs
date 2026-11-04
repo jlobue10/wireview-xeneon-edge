@@ -148,8 +148,11 @@ mod windows {
         }
         if redirected {
             // The daemons' own lines carry no time; one dated line per start
-            // is what makes a restart loop legible.
-            println!(
+            // is what makes a restart loop legible. Not println!: stdout is a
+            // real file now, and a write error (full disk) must not panic.
+            use std::io::Write as _;
+            let _ = writeln!(
+                std::io::stdout(),
                 "---- started {} (pid {}) ----",
                 crate::csvlog::LocalTime::now().iso8601(),
                 std::process::id()
