@@ -156,6 +156,14 @@ impl Bridge {
         &self.addrs
     }
 
+    /// Append the readings to `log` at its interval, from its own thread.
+    /// Called after a successful start, so a bridge that cannot bind (the
+    /// restart loop that follows) leaves no header-only CSV behind each try.
+    pub fn log_csv(&mut self, log: CsvLog) {
+        let state = Arc::clone(&self.state);
+        self.threads.push(thread::spawn(move || csv_loop(&state, log)));
+    }
+
     pub fn port(&self) -> u16 {
         self.addrs[0].port()
     }
@@ -346,12 +354,18 @@ fn csv_loop(state: &State, mut log: CsvLog) {
         let data = state.read_device();
         if let Err(e) = log.record(&data) {
             if last_warn.is_none_or(|t| t.elapsed() >= Duration::from_secs(60)) {
-                println!("csv log: cannot write {}: {e}; retrying", log.path().display());
+                wireview_core::say!("csv log: cannot write {}: {e}; retrying", log.path().display());
                 last_warn = Some(Instant::now());
             }
             // record() only stamps its schedule on success, so without this the
-            // loop would spin at full speed on every failing write.
-            thread::sleep(log.interval().min(Duration::from_secs(5)).max(Duration::from_millis(250)));
+            // loop would spin at full speed on every failing write. In slices,
+            // so a shutdown is not held up by the whole pause.
+            let mut left = log.interval().min(Duration::from_secs(5)).max(Duration::from_millis(250));
+            while !left.is_zero() && !state.stopping.load(Ordering::SeqCst) {
+                let step = left.min(Duration::from_millis(250));
+                thread::sleep(step);
+                left -= step;
+            }
         }
     }
 }
@@ -412,7 +426,7 @@ fn serve(state: &State, mut stream: TcpStream) {
     };
     if state.log_requests {
         let peer = stream.peer_addr().map_or("?".to_string(), |a| a.to_string());
-        eprintln!("{peer} \"{line}\" {}", response.status);
+        wireview_core::say_err!("{peer} \"{line}\" {}", response.status);
     }
     let _ = response.write_to(&mut stream, &format!("WireViewBridge/{VERSION}"), deadline);
 }
@@ -499,13 +513,16 @@ fn readings_json(state: &State) -> Arc<Vec<u8>> {
     if cache.at.is_some_and(|at| at.elapsed() <= CACHE) {
         return Arc::clone(&cache.body);
     }
+    // The widgets poll every second: a good place to keep the headless
+    // log file from growing without bound.
+    wireview_core::console::maintain();
     let mut data = state.read_device();
     if let Some(dev) = data.device.as_mut() {
         dev.uid = None; // never served
     }
     let src = data.describe_source();
     if cache.last_source.as_deref() != Some(&src) {
-        println!("readings: {src}");
+        wireview_core::say!("readings: {src}");
         cache.last_source = Some(src);
     }
     data.served_at = Some(unix_time());

@@ -30,6 +30,27 @@ pub use watchdog::Watchdog;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// `println!` that cannot panic. Started headless, the daemons write stdout
+/// to a log file ([`console::attach`]); `println!` panics when such a write
+/// fails (full disk), which would end a daemon, or the watchdog thread,
+/// over a log line.
+#[macro_export]
+macro_rules! say {
+    ($($arg:tt)*) => {{
+        use ::std::io::Write as _;
+        let _ = writeln!(::std::io::stdout(), $($arg)*);
+    }};
+}
+
+/// `eprintln!` that cannot panic; see [`say!`].
+#[macro_export]
+macro_rules! say_err {
+    ($($arg:tt)*) => {{
+        use ::std::io::Write as _;
+        let _ = writeln!(::std::io::stderr(), $($arg)*);
+    }};
+}
+
 /// Seconds since the Unix epoch, as the JSON timestamps use.
 pub fn unix_time() -> f64 {
     std::time::SystemTime::now()

@@ -31,6 +31,8 @@ pub const DEFAULT_LIMIT: Duration = Duration::from_secs(20);
 /// Longest limit the command line accepts.
 pub const MAX_LIMIT: Duration = Duration::from_secs(3600);
 const POLL: Duration = Duration::from_millis(250);
+/// A gap between two polls this long means the process was not running.
+const FROZEN: Duration = Duration::from_secs(2);
 
 /// Called with the stuck call's name and how long it has been running.
 type Handler = Box<dyn Fn(&'static str, Duration) + Send>;
@@ -48,6 +50,14 @@ struct Inner {
 impl Inner {
     fn lock(&self) -> std::sync::MutexGuard<'_, Inflight> {
         self.inflight.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The process was not running for a while (suspend and resume, a
+    /// debugger, heavy swapping): the time that passed is not the calls'.
+    fn restamp(&self, now: Instant) {
+        for (_, since) in self.lock().calls.values_mut() {
+            *since = now;
+        }
     }
 
     /// The longest-running watched call, when it has outlived the limit.
@@ -87,7 +97,9 @@ impl Watchdog {
         Self::with_handler(
             limit,
             Box::new(|what, waited| {
-                println!(
+                // Not println!: a failed write to the log file must not
+                // panic this thread, or the exit below never happens.
+                crate::say!(
                     "watchdog: {what} has not returned in {} s; exiting so the scheduled task restarts the daemon",
                     waited.as_secs()
                 );
@@ -110,16 +122,25 @@ impl Watchdog {
         // The thread holds only a weak reference: once the watchdog and all
         // of its guards are gone, it ends on its next poll.
         let spawned = thread::Builder::new().name("wireview-watchdog".into()).spawn(move || {
+            let mut last_poll = Instant::now();
             loop {
                 thread::sleep(POLL);
                 let Some(inner) = weak.upgrade() else { return };
+                let now = Instant::now();
+                if now.saturating_duration_since(last_poll) > FROZEN {
+                    // This thread did not run either: the machine slept or the
+                    // process was frozen. A call in flight gets its time back
+                    // rather than being blamed for the gap.
+                    inner.restamp(now);
+                }
+                last_poll = now;
                 if let Some((what, waited)) = inner.overdue() {
                     handler(what, waited);
                 }
             }
         });
         if spawned.is_err() {
-            println!("watchdog: cannot start its thread; hangs will not be detected");
+            crate::say!("watchdog: cannot start its thread; hangs will not be detected");
         }
         Watchdog { inner }
     }
@@ -177,13 +198,35 @@ mod tests {
 
     #[test]
     fn a_call_that_returns_in_time_does_not_trip() {
-        let (wd, trips, _) = counting(Duration::from_millis(300));
+        // A generous limit: a stalled CI runner must not turn 20 ms of
+        // work into an overdue call.
+        let (wd, trips, _) = counting(Duration::from_secs(1));
         for _ in 0..3 {
             let _g = wd.watch("quick");
             thread::sleep(Duration::from_millis(20));
         }
-        thread::sleep(Duration::from_millis(700));
+        thread::sleep(Duration::from_millis(600));
         assert_eq!(trips.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn a_frozen_process_gets_its_time_back() {
+        let (wd, _, _) = counting(Duration::from_secs(60));
+        let _g = wd.watch("in flight across a sleep");
+        thread::sleep(Duration::from_millis(30));
+        assert!(wd.inner.overdue().is_none());
+        // Pretend the limit passed while the process was not running.
+        wd.inner
+            .lock()
+            .calls
+            .values_mut()
+            .for_each(|(_, since)| *since -= Duration::from_secs(120));
+        assert!(
+            wd.inner.overdue().is_some(),
+            "the aged guard should read as overdue before the restamp"
+        );
+        wd.inner.restamp(Instant::now());
+        assert!(wd.inner.overdue().is_none(), "the restamp should clear the gap");
     }
 
     #[test]
@@ -201,7 +244,9 @@ mod tests {
     fn dropping_the_guard_stops_the_reports() {
         let (wd, trips, _) = counting(Duration::from_millis(100));
         let g = wd.watch("stuck for a while");
-        thread::sleep(Duration::from_millis(500));
+        // Polls land near 250 ms multiples; drop between two of them so the
+        // count read here cannot race a poll in progress.
+        thread::sleep(Duration::from_millis(620));
         drop(g);
         let after_drop = trips.load(Ordering::SeqCst);
         assert!(after_drop >= 1);
