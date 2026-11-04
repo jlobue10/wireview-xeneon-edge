@@ -29,6 +29,12 @@ jobs:
           if ("v$version" -ne $env:GITHUB_REF_NAME) { throw "tag $env:GITHUB_REF_NAME does not match version $version" }
       - run: cargo test --workspace --locked
       - run: cargo build --release --locked -p wireview-bridge
+      - name: Binary smoke
+        shell: pwsh
+        run: |
+          $out = (./target/release/wireview-bridge.exe --version) -join ' '
+          if ($LASTEXITCODE -ne 0) { throw "wireview-bridge.exe --version failed: $out" }
+          if ($out -notlike "*$($env:GITHUB_REF_NAME.TrimStart('v'))*") { throw "version output does not match tag: $out" }
       - name: Collect files
         shell: pwsh
         run: |
