@@ -309,9 +309,12 @@ pub fn start(config: Config) -> Result<Bridge, StartError> {
     Ok(Bridge { state, addrs, threads })
 }
 
-/// Read the device at the log's interval and append a row, until shutdown
-/// or the first write error.
+/// Read the device at the log's interval and append a row, until shutdown.
+/// A write error (disk full, log folder removed, temporary share violation)
+/// must not end the log for the rest of the daemon's life: warn at most once
+/// a minute and retry on the next tick.
 fn csv_loop(state: &State, mut log: CsvLog) {
+    let mut last_warn: Option<Instant> = None;
     while !state.stopping.load(Ordering::SeqCst) {
         let wait = log.due_in();
         if !wait.is_zero() {
@@ -321,8 +324,13 @@ fn csv_loop(state: &State, mut log: CsvLog) {
         let data = catch_unwind(AssertUnwindSafe(|| state.reader.read()))
             .unwrap_or_else(|_| Readings::problem(state.reader.source().as_str(), "Reader error", "the reader failed unexpectedly"));
         if let Err(e) = log.record(&data) {
-            println!("csv log: cannot write {}: {e}; logging stopped", log.path().display());
-            return;
+            if last_warn.is_none_or(|t| t.elapsed() >= Duration::from_secs(60)) {
+                println!("csv log: cannot write {}: {e}; retrying", log.path().display());
+                last_warn = Some(Instant::now());
+            }
+            // record() only stamps its schedule on success, so without this the
+            // loop would spin at full speed on every failing write.
+            thread::sleep(log.interval().min(Duration::from_secs(5)).max(Duration::from_millis(250)));
         }
     }
 }
