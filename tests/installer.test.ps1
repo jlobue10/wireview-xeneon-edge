@@ -1,18 +1,52 @@
 # Isolated installer regression checks. Administrative APIs and downloads are
 # mocked; only --version is executed, using the binary already built by Cargo.
-param([switch]$Child, [string]$Installer, [string]$Directory, [string]$Binary, [switch]$Download, [switch]$ExplicitDir, [switch]$WithLog)
+param([switch]$Child, [string]$Installer, [string]$Directory, [string]$Binary, [switch]$Download, [switch]$ExplicitDir, [switch]$WithLog, [switch]$Start)
 $ErrorActionPreference = 'Stop'
 if ($Child) {
-    function Get-ScheduledTask { return $null }
+    # The task reports as present so the Stop/Unregister paths run for real, and the
+    # Register call is captured: the audit regression (nothing restarting an exited
+    # bridge) is invisible unless the trigger and settings arguments are asserted.
+    # The task must report as present so Stop/Unregister paths run; no param(): -TaskName/-ErrorAction arrive in $args.
+    function Get-ScheduledTask {
+        for ($i = 0; $i -lt $args.Count; $i++) {
+            if ("$($args[$i])" -ieq '-TaskName' -and $i + 1 -lt $args.Count) { return [pscustomobject]@{ TaskName = $args[$i + 1]; State = 'Ready' } }
+        }
+        return [pscustomobject]@{ State = 'Ready' }
+    }
     function Get-CimInstance { return @() }
-    function Stop-ScheduledTask {}
+    # The mocks record what they were called with under $Directory. The installer stops a
+    # running daemon before it creates the install folder, so the recorder makes the folder.
+    function Record([string]$file, [string]$text) {
+        New-Item -ItemType Directory -Force -Path $Directory | Out-Null
+        Set-Content -LiteralPath (Join-Path $Directory $file) -Value $text
+    }
+    function Disable-ScheduledTask { Record 'task-disabled.txt' ($args -join ' ') }
+    function Stop-ScheduledTask { Record 'task-stopped.txt' ($args -join ' ') }
     function Stop-Process {}
-    function Unregister-ScheduledTask {}
-    function New-ScheduledTaskAction { Set-Content -LiteralPath (Join-Path $Directory 'task-arguments.txt') -Value ($args -join ' ') }
-    function New-ScheduledTaskTrigger {}
+    function Unregister-ScheduledTask { Record 'task-unregistered.txt' ($args -join ' ') }
+    function Start-ScheduledTask { Record 'task-started.txt' ($args -join ' ') }
+    function New-ScheduledTaskAction { Record 'task-arguments.txt' ($args -join ' ') }
+    # Triggers and settings must be objects: install.ps1 passes them to Register-ScheduledTask.
+    function New-ScheduledTaskTrigger { return [pscustomobject]@{ CreationArgs = ($args -join ' ') } }
     function New-ScheduledTaskPrincipal {}
-    function New-ScheduledTaskSettingsSet { return [pscustomobject]@{ ExecutionTimeLimit = '' } }
-    function Register-ScheduledTask {}
+    function New-ScheduledTaskSettingsSet {
+        $restart = 0
+        for ($i = 0; $i -lt $args.Count; $i++) {
+            if ("$($args[$i])" -ieq '-RestartCount' -and $i + 1 -lt $args.Count) { $restart = [int]$args[$i + 1] }
+        }
+        return [pscustomobject]@{ ExecutionTimeLimit = ''; RestartCount = $restart }
+    }
+    function Register-ScheduledTask {
+        param($TaskName, $Action, $Trigger, $Principal, $Settings, $Description, [switch]$Force)
+        $json = [pscustomobject]@{
+            TaskName = $TaskName
+            TriggerArgs = @($Trigger | ForEach-Object { $_.CreationArgs })
+            RestartCount = $Settings.RestartCount
+            ExecutionTimeLimit = $Settings.ExecutionTimeLimit
+            Force = [bool]$Force
+        } | ConvertTo-Json -Compress
+        Record 'task-registration.json' $json
+    }
     function Unblock-File {}
     function Invoke-WebRequest {
         param([switch]$UseBasicParsing, [Parameter(Position=0)][string]$Uri, [string]$OutFile)
@@ -21,7 +55,8 @@ if ($Child) {
     }
     if ($Download) {
         $hash = (Get-FileHash -LiteralPath $Binary -Algorithm SHA256).Hash
-        if ($WithLog) { & $Installer -Dir $Directory -Ref v2.5.0 -Sha256 $hash -NoStart -Log }
+        if ($Start) { & $Installer -Dir $Directory -Ref v2.5.0 -Sha256 $hash }
+        elseif ($WithLog) { & $Installer -Dir $Directory -Ref v2.5.0 -Sha256 $hash -NoStart -Log }
         else { & $Installer -Dir $Directory -Ref v2.5.0 -Sha256 $hash -NoStart }
     } elseif ($ExplicitDir) { & $Installer -Uninstall -Dir $Directory }
     else { & $Installer -Uninstall }
@@ -73,6 +108,26 @@ try {
     $taskArgs = Get-Content -LiteralPath (Join-Path $managed 'task-arguments.txt') -Raw
     Check ($taskArgs -notmatch '--csv-log') 'CSV logging must be off unless -Log is given'
 
+    # Audit regression (2026-11-03): with only a logon trigger, a bridge that exits later is
+    # never restarted. Pin the safety-net trigger and the restart settings Register receives.
+    $regPath = Join-Path $managed 'task-registration.json'
+    Check (Test-Path -LiteralPath $regPath) 'install.ps1 never called Register-ScheduledTask'
+    $reg = Get-Content -LiteralPath $regPath -Raw | ConvertFrom-Json
+    Check (@($reg.TriggerArgs).Count -ge 2) "at least two triggers (logon + safety net) required, got $(@($reg.TriggerArgs).Count)"
+    Check (@($reg.TriggerArgs | Where-Object { $_ -match 'AtLogOn' }).Count -ge 1) 'no logon trigger was registered'
+    Check (@($reg.TriggerArgs | Where-Object { $_ -match 'RepetitionInterval' }).Count -ge 1) 'no recurring safety-net trigger was registered'
+    Check ($reg.RestartCount -eq 999) "RestartCount should be 999, got $($reg.RestartCount)"
+    Check ($reg.ExecutionTimeLimit -eq 'PT0S') "ExecutionTimeLimit should be PT0S, got $($reg.ExecutionTimeLimit)"
+    Check ($reg.Force) 'Register-ScheduledTask should be called with -Force'
+    Check (Test-Path -LiteralPath (Join-Path $managed 'task-stopped.txt')) 'install.ps1 did not stop a running instance before re-registering'
+    Check (Test-Path -LiteralPath (Join-Path $managed 'task-disabled.txt')) 'install.ps1 did not disable the task before replacing the executable (its own trigger could restart it)'
+
+    # Without -NoStart the installer must start the task right away.
+    $started = Join-Path $root 'downloaded-started'
+    & $engine -NoProfile -File $PSCommandPath -Child -Download -Start -Installer (Join-Path $repoRoot 'install.ps1') -Directory $started -Binary $binaryPath
+    Check ($LASTEXITCODE -eq 0) 'Mocked download install with immediate start failed'
+    Check (Test-Path -LiteralPath (Join-Path $started 'task-started.txt')) 'install without -NoStart did not call Start-ScheduledTask'
+
     # -Log adds the CSV log, in logs\ under the install folder unless -LogDir says otherwise.
     $logged = Join-Path $root 'downloaded-logged'
     & $engine -NoProfile -File $PSCommandPath -Child -Download -WithLog -Installer (Join-Path $repoRoot 'install.ps1') -Directory $logged -Binary $binaryPath
@@ -101,6 +156,7 @@ try {
     Check (-not (Test-Path -LiteralPath (Join-Path $managed 'install.ps1'))) 'Managed installer was not removed'
     Check (-not (Test-Path -LiteralPath (Join-Path $managed '.wireview-install.json'))) 'Managed marker was not removed'
     Check (Test-Path -LiteralPath (Join-Path $managed 'user-notes.txt')) 'Uninstall removed user files'
+    Check (Test-Path -LiteralPath (Join-Path $managed 'task-unregistered.txt')) 'Uninstall did not call Unregister-ScheduledTask'
 
     $legacy = Join-Path $env:LOCALAPPDATA $name
     Fixture $legacy
@@ -124,7 +180,7 @@ try {
     Fixture $foreign 'someone/another-repo'
     Run-Uninstall $foreign
     Check (Test-Path -LiteralPath (Join-Path $foreign $exe)) 'Foreign marker should not authorise deletion'
-    Write-Host 'PASS: managed download, -Log, explicit destinations with adjacent binaries, copied installer, older default/custom install, source files and user files.'
+    Write-Host 'PASS: managed download, -Log, trigger registration (logon + safety net, RestartCount), immediate start, explicit destinations with adjacent binaries, copied installer, older default/custom install, source and user files, task unregistration.'
 } finally {
     $env:LOCALAPPDATA = $oldLocal
     $env:TEMP = $oldTemp
