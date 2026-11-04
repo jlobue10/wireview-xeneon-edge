@@ -15,9 +15,9 @@
 #   powershell -ExecutionPolicy Bypass -File install.ps1 -Uninstall
 #
 # What it does: downloads wireview-bridge.exe (one self-contained file, nothing else to install),
-# checks its SHA-256, registers a per-user Scheduled Task that runs the bridge at logon (no admin
-# rights needed), and starts it. Re-running updates and restarts. An older Python-based install in
-# the same folder is replaced.
+# checks its SHA-256, registers a per-user Scheduled Task that runs the bridge at logon and restarts
+# it every 5 minutes if it has exited (no admin rights needed), and starts it. Re-running updates
+# and restarts. An older Python-based install in the same folder is replaced.
 param(
     [string]$ExtraArgs = '',
     [string]$Dir = '',
@@ -186,18 +186,26 @@ if ($Log) {
 # --- run at logon (per-user scheduled task) ----------------------------------
 $daemonArgs = (@($BaseArgs, $ExtraArgs) | Where-Object { $_ }) -join ' '
 
-Say "Registering scheduled task '$TaskName' (runs at logon)"
+Say "Registering scheduled task '$TaskName' (runs at logon, and every 5 minutes as a safety net)"
 Stop-Daemon
 if ($LegacyShortcut -and (Test-Path $LegacyShortcut)) { Remove-Item $LegacyShortcut }
 $actionArgs = @{ Execute = $exePath; WorkingDirectory = $Dir }
 if ($daemonArgs) { $actionArgs.Argument = $daemonArgs }
 $action = New-ScheduledTaskAction @actionArgs
-$trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
-    -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+    -MultipleInstances IgnoreNew -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1)
 $settings.ExecutionTimeLimit = 'PT0S'   # no 3-day cap; it is a daemon
-Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal `
+# The logon trigger alone is not enough: once the bridge has been started, a later exit is
+# never noticed, and a missed logon event (task registered after logon, wake, fast startup)
+# never starts it at all. A second, recurring trigger is the safety net; -MultipleInstances
+# IgnoreNew above turns each repetition into a no-op while the bridge is already running.
+# Days 9999 rather than [TimeSpan]::MaxValue, which Windows PowerShell 5.1 rejects.
+$triggerAtLogon = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+$triggerSafetyNet = New-ScheduledTaskTrigger -Once -At (Get-Date).Date `
+    -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 9999)
+Register-ScheduledTask -TaskName $TaskName -Action $action `
+    -Trigger @($triggerAtLogon, $triggerSafetyNet) -Principal $principal `
     -Settings $settings -Description $Description -Force | Out-Null
 
 if (-not $NoStart) {
