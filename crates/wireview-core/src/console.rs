@@ -80,7 +80,7 @@ mod tests {
 
 #[cfg(windows)]
 mod windows {
-    use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Foundation::{CloseHandle, GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::Storage::FileSystem::{
         CreateFileW, FILE_APPEND_DATA, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_ALWAYS, OPEN_EXISTING,
     };
@@ -88,8 +88,8 @@ mod windows {
         ATTACH_PARENT_PROCESS, AttachConsole, GetStdHandle, STD_ERROR_HANDLE, STD_HANDLE, STD_OUTPUT_HANDLE, SetStdHandle,
     };
 
-    use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Mutex, Once};
     use std::time::{Duration, Instant};
 
     fn usable(h: HANDLE) -> bool {
@@ -120,8 +120,8 @@ mod windows {
                     0,
                     std::ptr::null_mut(),
                 );
-                if usable(h) {
-                    SetStdHandle(which, h);
+                if usable(h) && SetStdHandle(which, h) == 0 {
+                    CloseHandle(h);
                 }
             }
         }
@@ -132,6 +132,7 @@ mod windows {
     /// The handles this module set, as integers (a HANDLE is a raw pointer
     /// and cannot sit in a static); 0 = that stream was not redirected.
     static OURS: Mutex<[isize; 2]> = Mutex::new([0; 2]);
+    static REOPEN_PENDING: AtomicBool = AtomicBool::new(false);
     static LAST_CHECK: Mutex<Option<Instant>> = Mutex::new(None);
     const CHECK_EVERY: Duration = Duration::from_secs(60);
     const STREAMS: [STD_HANDLE; 2] = [STD_OUTPUT_HANDLE, STD_ERROR_HANDLE];
@@ -173,6 +174,23 @@ mod windows {
             && std::fs::rename(path, path.with_extension("old.log")).is_ok()
     }
 
+    /// Rust's default panic hook writes directly to the OS stderr handle,
+    /// bypassing StderrLock. Join the same lock order used by rotation before
+    /// calling it, so even a caught reader/render panic cannot race retirement.
+    fn synchronize_panic_output() {
+        static ONCE: Once = Once::new();
+        ONCE.call_once(|| {
+            let previous = std::panic::take_hook();
+            std::panic::set_hook(Box::new(move |info| {
+                let stdout = std::io::stdout();
+                let stderr = std::io::stderr();
+                let _out = stdout.lock();
+                let _err = stderr.lock();
+                previous(info);
+            }));
+        });
+    }
+
     /// No console exists (Task Scheduler start): append stdout/stderr to a
     /// per-executable log file so daemon messages survive the run. Runs
     /// accumulate in one file, each under a dated start line, so a restart
@@ -193,24 +211,73 @@ mod windows {
                     }
                     let h = open_append(&path);
                     if usable(h) {
-                        SetStdHandle(which, h);
-                        ours[i] = h as isize;
-                        redirected = true;
+                        if SetStdHandle(which, h) != 0 {
+                            ours[i] = h as isize;
+                            redirected = true;
+                        } else {
+                            CloseHandle(h);
+                        }
                     }
                 }
             }
         }
         if redirected {
+            synchronize_panic_output();
             REDIRECTED.store(true, Ordering::Release);
             stamp("started");
         }
     }
 
-    /// Rotate a log that grew past the cap while running: rename it and
-    /// point the streams at a fresh file. The old handle is left open on
-    /// purpose: a writer may have fetched it a moment ago, and a closed
-    /// handle value could be reused for another file. One leaked handle
-    /// per MiB of log is nothing.
+    /// Replace owned standard handles while holding both Rust output locks.
+    /// All daemon writes (including our synchronized panic hook) use these streams; no writer
+    /// can retain an in-flight handle while it is replaced and closed. Flush
+    /// stdout's line buffer first so pending bytes stay in the previous log.
+    /// Never close or replace an output redirected by the caller.
+    fn rotate_handles(path: &std::path::Path, ours: &mut [isize; 2], pending: &mut bool) -> bool {
+        use std::io::Write as _;
+        let stdout = std::io::stdout();
+        let stderr = std::io::stderr();
+        let mut out = stdout.lock();
+        let mut err = stderr.lock();
+        let _ = out.flush();
+        let _ = err.flush();
+        if !*pending && !rotate(path) {
+            return false;
+        }
+        *pending = false;
+        // SAFETY: owned handles were opened here and output locks exclude
+        // concurrent Rust writes. Only a successful replacement retires one.
+        unsafe {
+            for (i, which) in STREAMS.into_iter().enumerate() {
+                if ours[i] == 0 {
+                    continue;
+                }
+                let old = ours[i] as HANDLE;
+                if GetStdHandle(which) != old {
+                    // The caller has replaced this stream since attach().
+                    CloseHandle(old);
+                    ours[i] = 0;
+                    continue;
+                }
+                let h = open_append(path);
+                if !usable(h) {
+                    *pending = true;
+                    continue;
+                }
+                if SetStdHandle(which, h) == 0 {
+                    CloseHandle(h);
+                    *pending = true;
+                    continue;
+                }
+                ours[i] = h as isize;
+                CloseHandle(old);
+            }
+        }
+        true
+    }
+
+    /// Rotate and close retired handles. If reopening fails (e.g. a temporary
+    /// sharing violation), keep writing to the old handle and retry next time.
     pub fn maintain() {
         if !REDIRECTED.load(Ordering::Acquire) {
             return;
@@ -222,26 +289,69 @@ mod windows {
             }
             *last = Some(Instant::now());
         }
-        let path = super::log_path();
-        if !rotate(&path) {
-            return;
+        let mut ours = OURS.lock().unwrap_or_else(|e| e.into_inner());
+        let mut pending = REOPEN_PENDING.load(Ordering::Relaxed);
+        let rotated = rotate_handles(&super::log_path(), &mut ours, &mut pending);
+        REOPEN_PENDING.store(pending, Ordering::Relaxed);
+        drop(ours);
+        if rotated && !pending {
+            stamp("continued");
         }
-        {
-            let mut ours = OURS.lock().unwrap_or_else(|e| e.into_inner());
-            // SAFETY: plain Win32 calls; every pointer passed is valid for the call.
-            unsafe {
-                for (i, which) in STREAMS.into_iter().enumerate() {
-                    if ours[i] == 0 {
-                        continue;
-                    }
-                    let h = open_append(&path);
-                    if usable(h) {
-                        SetStdHandle(which, h);
-                        ours[i] = h as isize;
-                    }
-                }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::os::windows::fs::OpenOptionsExt;
+
+        #[test]
+        fn rotation_releases_old_files() {
+            // Isolate manipulation of process-wide standard handles from the
+            // test runner and other tests. A child failure is captured by the
+            // parent rather than lost in the redirected output.
+            const CHILD: &str = "WIREVIEW_LOG_ROTATION_TEST";
+            if std::env::var_os(CHILD).is_none() {
+                let result = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args(["--exact", "console::windows::tests::rotation_releases_old_files", "--nocapture"])
+                    .env(CHILD, "1")
+                    .output()
+                    .unwrap();
+                assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+                return;
             }
+            let dir = std::env::temp_dir().join(format!("wireview-rotation-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("daemon.log");
+            let mut pending = false;
+            // SAFETY: this isolated child is the only owner of these handles.
+            unsafe {
+                let original = GetStdHandle(STD_OUTPUT_HANDLE);
+                let h = open_append(&path);
+                assert!(usable(h));
+                assert_ne!(SetStdHandle(STD_OUTPUT_HANDLE, h), 0);
+                let mut ours = [h as isize, 0];
+                for _ in 0..16 {
+                    std::fs::OpenOptions::new()
+                        .write(true)
+                        .open(&path)
+                        .unwrap()
+                        .set_len(super::super::MAX_LOG_BYTES)
+                        .unwrap();
+                    assert!(rotate_handles(&path, &mut ours, &mut pending));
+                    assert!(!pending);
+                    // Exclusive access fails if ANY retired handle is still
+                    // open, even when that handle allows delete sharing.
+                    let retired = std::fs::OpenOptions::new()
+                        .read(true)
+                        .share_mode(0)
+                        .open(path.with_extension("old.log"))
+                        .unwrap();
+                    drop(retired);
+                }
+                assert_ne!(SetStdHandle(STD_OUTPUT_HANDLE, original), 0);
+                CloseHandle(ours[0] as HANDLE);
+            }
+            std::fs::remove_dir_all(dir).unwrap();
         }
-        stamp("continued");
     }
 }

@@ -70,10 +70,10 @@ impl SecretStore {
         match fs::metadata(&self.path) {
             Ok(meta) => {
                 let mtime = meta.modified().ok()?;
-                if let Some((at, secret)) = cache.as_ref() {
-                    if *at == mtime {
-                        return Some(secret.clone());
-                    }
+                if let Some((at, secret)) = cache.as_ref()
+                    && *at == mtime
+                {
+                    return Some(secret.clone());
                 }
                 let data = match fs::read(&self.path) {
                     Ok(data) => data.trim_ascii().to_vec(),
@@ -181,7 +181,7 @@ pub(crate) fn hex(bytes: &[u8]) -> String {
 
 fn unhex(s: &str) -> Option<Vec<u8>> {
     let b = s.as_bytes();
-    if b.len() % 2 != 0 {
+    if !b.len().is_multiple_of(2) {
         return None;
     }
     let digit = |c: u8| (c as char).to_digit(16).map(|d| d as u8);

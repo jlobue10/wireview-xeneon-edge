@@ -95,7 +95,7 @@ impl FromStr for Source {
 struct SerialState {
     dev: Option<WireViewSerial>,
     next_try: Option<Instant>,
-    last_error: Option<String>,
+    last_problem: Option<Readings>,
 }
 
 #[derive(Default)]
@@ -103,6 +103,8 @@ struct BridgeState {
     next_try: Option<Instant>,
     last_error: Option<String>,
 }
+
+type PortFinder = Box<dyn Fn() -> Vec<String> + Send + Sync>;
 
 type HwinfoBackend = Box<dyn Fn() -> Readings + Send + Sync>;
 
@@ -116,6 +118,7 @@ pub struct Reader {
     serial: Mutex<SerialState>,
     bridge: Mutex<BridgeState>,
     hwinfo: HwinfoBackend,
+    find_ports: PortFinder,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -134,6 +137,7 @@ impl Reader {
             serial: Mutex::default(),
             bridge: Mutex::default(),
             hwinfo: Box::new(hwinfo::read_wireview),
+            find_ports: Box::new(find_ports),
         }
     }
 
@@ -175,11 +179,11 @@ impl Reader {
             return enforce_fresh(self.read_hwinfo());
         }
         if matches!(self.source, Source::Bridge | Source::Auto) {
-            if let Some(url) = &self.bridge_url {
-                if let Some(b) = self.read_bridge(url) {
-                    self.close();
-                    return enforce_fresh(b);
-                }
+            if let Some(url) = &self.bridge_url
+                && let Some(b) = self.read_bridge(url)
+            {
+                self.close();
+                return enforce_fresh(b);
             }
             if self.source == Source::Bridge {
                 let mut out = Readings::problem("bridge", "Bridge offline", self.bridge_url.as_deref().unwrap_or("no bridge URL"));
@@ -208,26 +212,39 @@ impl Reader {
         if st.dev.is_none() {
             let now = Instant::now();
             if st.next_try.is_some_and(|t| now < t) {
-                out.set_problem("WireView not connected", st.last_error.as_deref().unwrap_or("retrying"));
-                out.error = st.last_error.clone();
-                out.device_found = !find_ports().is_empty();
-                return out;
+                // Discovery is part of the retry, not of every display tick.
+                // Preserve the failure text too: an unchanged offline device
+                // must not alternate statuses and fill the daemon log.
+                return st
+                    .last_problem
+                    .clone()
+                    .unwrap_or_else(|| Readings::problem("serial", "WireView not connected", "retrying"));
             }
-            st.next_try = Some(now + RETRY);
-            match WireViewSerial::open(self.port.as_deref()) {
+            let ports = (self.find_ports)();
+            out.device_found = !ports.is_empty();
+            let port = self.port.as_deref().or_else(|| ports.first().map(String::as_str));
+            let opened = match port {
+                Some(port) => WireViewSerial::open(Some(port)),
+                None => Err(SerialError::Protocol(
+                    "no WireView Pro II USB serial port found (VID 0483 PID 5740)".into(),
+                )),
+            };
+            match opened {
                 Ok(dev) => {
                     st.dev = Some(dev);
-                    st.last_error = None;
+                    st.last_problem = None;
+                    st.next_try = None;
                 }
                 Err(e) => {
-                    st.last_error = Some(e.to_string());
                     out.error = Some(e.to_string());
-                    out.device_found = !find_ports().is_empty();
                     if out.device_found {
                         out.set_problem("COM port busy", "close the WireView app (and HWiNFO)");
                     } else {
                         out.set_problem("WireView not found", "plug the WireView Pro II into USB");
                     }
+                    // Start the delay after a potentially slow open/handshake.
+                    st.next_try = Some(Instant::now() + RETRY);
+                    st.last_problem = Some(out.clone());
                     return out;
                 }
             }
@@ -248,13 +265,13 @@ impl Reader {
                 data
             }
             Err(e) => {
-                st.last_error = Some(e.to_string());
                 out.error = Some(e.to_string());
                 out.device_found = true;
                 out.set_problem("Read failed", "reconnecting");
                 if matches!(e, SerialError::Transport(_)) {
                     st.dev = None;
                     st.next_try = Some(Instant::now() + READ_RETRY);
+                    st.last_problem = Some(out.clone());
                 }
                 out
             }
@@ -720,6 +737,30 @@ mod tests {
             r
         });
         assert_eq!(r.read().status.as_deref(), Some("WireView not in HWiNFO"));
+    }
+
+    #[test]
+    fn serial_backoff_caches_discovery_and_problem_until_retry() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        let scans = Arc::new(AtomicUsize::new(0));
+        let count = Arc::clone(&scans);
+        let mut r = Reader::new(Source::Serial, None, None);
+        r.find_ports = Box::new(move || {
+            count.fetch_add(1, Ordering::SeqCst);
+            Vec::new()
+        });
+        let first = r.read();
+        assert!(!first.ok);
+        for _ in 0..100 {
+            assert_eq!(r.read(), first);
+        }
+        assert_eq!(scans.load(Ordering::SeqCst), 1);
+        lock(&r.serial).next_try = Some(Instant::now());
+        assert_eq!(r.read(), first);
+        assert_eq!(scans.load(Ordering::SeqCst), 2, "retry must discover reconnected devices");
     }
 
     #[test]
