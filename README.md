@@ -304,3 +304,8 @@ After `cargo test`, `pwsh -NoProfile -File tests/installer.test.ps1` checks inst
 uninstallation in temporary directories with Windows administration and downloads mocked.
 
 Audit findings and the remaining hardware checks are recorded in [AUDIT-2026-09-30.md](AUDIT-2026-09-30.md).
+
+Source builds require Rust 1.88 or newer, including the patched `ctutils` dependency.
+Serial discovery is cached during retry delays; unplugged or busy devices do not trigger
+a new port enumeration on every widget poll. Headless log rotation synchronizes output
+and closes retired file handles instead of retaining them until process exit.

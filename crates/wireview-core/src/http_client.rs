@@ -148,10 +148,10 @@ pub(crate) fn get(url: &str, limits: &Limits) -> Result<Response, String> {
     let mut head_end: Option<usize> = None;
     let mut want: Option<usize> = None; // Content-Length
     loop {
-        if let (Some(h), Some(n)) = (head_end, want) {
-            if buf.len() >= h + n {
-                break;
-            }
+        if let (Some(h), Some(n)) = (head_end, want)
+            && buf.len() >= h + n
+        {
+            break;
         }
         stream.set_read_timeout(Some(left(deadline, limits.op_timeout)?)).map_err(io)?;
         let n = match stream.read(&mut chunk) {
@@ -174,10 +174,10 @@ pub(crate) fn get(url: &str, limits: &Limits) -> Result<Response, String> {
                 return Err("bridge reply headers too large".into());
             }
         }
-        if let Some(h) = head_end {
-            if buf.len() - h > limits.max_body {
-                return Err("bridge reply too large".into());
-            }
+        if let Some(h) = head_end
+            && buf.len() - h > limits.max_body
+        {
+            return Err("bridge reply too large".into());
         }
     }
 
@@ -210,14 +210,14 @@ pub(crate) fn get(url: &str, limits: &Limits) -> Result<Response, String> {
 fn content_length(head: &[u8]) -> Result<Option<usize>, String> {
     let head = std::str::from_utf8(head).map_err(|_| "bridge reply headers are not text")?;
     for line in head.split("\r\n").skip(1) {
-        if let Some((k, v)) = line.split_once(':') {
-            if k.trim().eq_ignore_ascii_case("content-length") {
-                return v
-                    .trim()
-                    .parse()
-                    .map(Some)
-                    .map_err(|_| "bad Content-Length in bridge reply".to_string());
-            }
+        if let Some((k, v)) = line.split_once(':')
+            && k.trim().eq_ignore_ascii_case("content-length")
+        {
+            return v
+                .trim()
+                .parse()
+                .map(Some)
+                .map_err(|_| "bad Content-Length in bridge reply".to_string());
         }
     }
     Ok(None)
