@@ -100,7 +100,8 @@ logon or within five minutes); `-ExtraArgs '--port 9000'` passes options to the 
 <details>
 <summary>Build from source</summary>
 
-With [Rust](https://rustup.rs) installed:
+With [Rust](https://rustup.rs) 1.88 or newer installed (the locked `sha2` and the patched
+`ctutils` need it):
 
 ```
 cargo build --release -p wireview-bridge
@@ -130,7 +131,9 @@ HTTP server.
 - `wireview-core/src/source.rs` picks the reader. `--source auto` (default) opens the COM port
   directly and falls back to HWiNFO64 shared memory (`hwinfo.rs`, HWiNFO 8.41+ with Shared
   Memory Support) only while the port is unavailable. `--source serial` / `hwinfo` force one;
-  `--serial-port COM5` overrides auto-detection by USB ID 0483:5740.
+  `--serial-port COM5` overrides auto-detection by USB ID 0483:5740. While the port is missing
+  or busy the reader retries every two seconds and answers widget polls in between from its
+  last result, so an unplugged WireView does not cost a USB port enumeration per poll.
 - While the bridge holds the port, HWiNFO's own WireView sensor stops updating; it resumes
   when the bridge exits.
 - The HWiNFO reader needs Total Current, Total Power and all six Pin Current values enabled
@@ -251,12 +254,13 @@ log each request.
 
 Started by the Scheduled Task the bridge has no console, so its messages go to
 `%LOCALAPPDATA%\wireview\wireview-bridge.log` (each start adds a dated line; past 1 MiB the
-file moves to `.old.log`). A blank iFrame or "cannot connect to host" in iCUE means nothing
-answered on port 8765: the log says whether the bridge exited and why (port in use, COM port
-problems). The task starts an exited bridge again, within a minute after a failure exit and
-within five minutes otherwise, and a read that never returns, which would otherwise leave a
-live bridge answering nothing, ends the process after `--watchdog` seconds (default 20, `0`
-turns it off) so the task restarts it. (A call stuck inside a driver that will not cancel can
+file moves to `.old.log` and the bridge continues in a fresh file, closing its handle on the
+old one so `.old.log` can be deleted while the bridge runs). A blank iFrame or "cannot connect
+to host" in iCUE means nothing answered on port 8765: the log says whether the bridge exited
+and why (port in use, COM port problems). The task starts an exited bridge again, within a
+minute after a failure exit and within five minutes otherwise, and a read that never returns,
+which would otherwise leave a live bridge answering nothing, ends the process after
+`--watchdog` seconds (default 20, `0` turns it off) so the task restarts it. (A call stuck inside a driver that will not cancel can
 hold even an exiting process; the log still names the call, and unplugging the WireView
 releases it.)
 After the bridge is back, iCUE's embedded browser may need the widget reloaded, or iCUE
@@ -286,6 +290,12 @@ time (`.cargo/config.toml`), because some antivirus drivers stall a parallel run
 itself is not affected.
 `cargo run -p wireview-core --example read` prints one reading as JSON.
 
+`node --test tests/widget.test.cjs` checks widget polling, stale detection and custom ports.
+After `cargo test`, `pwsh -NoProfile -File tests/installer.test.ps1` checks installation and
+uninstallation in temporary directories with Windows administration and downloads mocked.
+
+Audit findings and the remaining hardware checks are recorded in [AUDIT-2026-09-30.md](AUDIT-2026-09-30.md).
+
 ## Companion project
 
 [wireview-nexus](https://github.com/jlobue10/wireview-nexus) shows the same readings on a
@@ -298,14 +308,3 @@ COM port. It builds against the `wireview-core` crate of this repository.
 MIT. WireView serial protocol details from wireview-pro-ii and wireview-hwmon (MIT). The
 executable includes the Rust crates listed in `Cargo.lock` under their own licenses (MIT,
 Apache-2.0, and MPL-2.0 for `serialport`).
-
-`node --test tests/widget.test.cjs` checks widget polling, stale detection and custom ports.
-After `cargo test`, `pwsh -NoProfile -File tests/installer.test.ps1` checks installation and
-uninstallation in temporary directories with Windows administration and downloads mocked.
-
-Audit findings and the remaining hardware checks are recorded in [AUDIT-2026-09-30.md](AUDIT-2026-09-30.md).
-
-Source builds require Rust 1.88 or newer, including the patched `ctutils` dependency.
-Serial discovery is cached during retry delays; unplugged or busy devices do not trigger
-a new port enumeration on every widget poll. Headless log rotation synchronizes output
-and closes retired file handles instead of retaining them until process exit.
