@@ -15,13 +15,16 @@ serves the widget pages too. No HWiNFO, no Thermal Grizzly app; nothing leaves t
 and only the widget pages (the bridge's own origin and the GitHub Pages copy) may read the
 JSON from a browser.
 
+On **Linux**, where there is no iCUE, the same bridge serves a full-screen dashboard for the
+Edge instead: see [Linux](#linux).
+
 The bridge is a single executable, `wireview-bridge.exe`, written in Rust. It needs no runtime
 and no other files: the widget pages are built into it. (Releases up to 1.0.1 were Python; the
 JSON and the bridge authentication are unchanged, so old and new programs work together.)
 
 ## Install
 
-One command, in PowerShell:
+(Windows; for Linux see [Linux](#linux).) One command, in PowerShell:
 
 ```
 powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/jlobue10/wireview-xeneon-edge/main/install.ps1 | iex"
@@ -79,7 +82,7 @@ The one-liner above runs whatever `install.ps1` is on `main` today. To install e
 reviewed, fetch the bootstrap from the same tag and pass the hash from that release's notes:
 
 ```
-powershell -ExecutionPolicy Bypass -c "& ([scriptblock]::Create((irm https://raw.githubusercontent.com/jlobue10/wireview-xeneon-edge/v2.7.0/install.ps1))) -Ref v2.7.0 -Sha256 <hash>"
+powershell -ExecutionPolicy Bypass -c "& ([scriptblock]::Create((irm https://raw.githubusercontent.com/jlobue10/wireview-xeneon-edge/v2.8.0/install.ps1))) -Ref v2.8.0 -Sha256 <hash>"
 ```
 
 Fully verified, with no remote code before the check: download `wireview-bridge.exe` and
@@ -111,6 +114,100 @@ target\release\wireview-bridge.exe
 Copy `install.ps1` next to the executable and run it to register the task in place.
 </details>
 
+## Linux
+
+Corsair has no iCUE for Linux, and the Xeneon Edge needs none: it is an ordinary 2560×720
+monitor (DisplayPort or USB-C). So instead of iFrame widgets inside iCUE, the bridge serves a
+**dashboard** page, `http://localhost:8765/edge/`, that fills the whole Edge with the widgets in
+iCUE-like slots, and a browser shows it full-screen.
+
+### Install
+
+In a terminal, as your normal user (not root):
+
+```
+curl -fsSL https://raw.githubusercontent.com/jlobue10/wireview-xeneon-edge/main/install.sh | sh -s -- --kiosk
+```
+
+The installer (x86-64; Linux binaries start with release 2.8.0):
+
+- downloads `wireview-bridge-linux-x86_64` from the latest release to
+  `~/.local/share/wireview-xeneon-edge` and checks its SHA-256. The binary is static (musl): no
+  libraries, any distribution.
+- installs one udev rule, `/etc/udev/rules.d/70-wireview.rules`, the only step that asks for
+  `sudo`. The WireView is a USB serial port (`/dev/ttyACM*`) that otherwise only root and the
+  `dialout`/`uucp` group may open; the rule gives it to whoever is logged in at the machine
+  (`uaccess`, no group change, no re-login) and tells ModemManager not to probe it. Its USB ID
+  0483:5740 is STMicroelectronics' generic virtual COM port, so the rule also matches other
+  STM32 gadgets. `--no-udev` skips the step.
+- registers and starts a systemd user service, `wireview-bridge.service`, which starts at login
+  and restarts the bridge whenever it exits.
+- with `--kiosk`, adds a login autostart entry that opens the dashboard full-screen on the Edge
+  (`--kiosk-url <URL>` to show another page or add options).
+
+Check <http://localhost:8765/api/wireview> shows `"ok": true`. `"No access to serial port"`
+means the udev rule is missing or the WireView was not re-plugged/triggered since.
+
+Both parts start by themselves from then on: the bridge with your systemd user session, the
+kiosk when you log in to the desktop. Leave out `--kiosk` for the bridge alone, and open the
+dashboard in any browser window instead. Running the installer again updates the bridge and
+changes the options; for example, to give the kiosk a theme:
+
+```
+~/.local/share/wireview-xeneon-edge/install.sh --kiosk-url 'http://localhost:8765/edge/?theme=dracula'
+```
+
+### Uninstall
+
+```
+~/.local/share/wireview-xeneon-edge/install.sh --uninstall
+sudo rm /etc/udev/rules.d/70-wireview.rules
+```
+
+The first command stops and removes the service, the kiosk autostart entry, the binary and the
+installer itself, and leaves any file you added to the folder (CSV logs, say). Close a running
+kiosk with Alt+F4. The second removes the udev rule, the one thing installed outside your home
+directory. The kiosk browser's private profile is in `~/.local/state/wireview-edge-kiosk` and the
+bridge secret in `~/.config/wireview`; delete them too for a clean slate.
+
+### Dashboard, kiosk and options
+
+**The dashboard.** `/edge/` shows per-wire current, total current and total power side by side.
+`?layout=` rearranges it: slots left to right separated by commas, `a/b` stacks two widgets in
+one slot, `name:2` makes a slot twice as wide. All the [URL options](#url-options) are passed on
+to the widgets:
+
+```
+http://localhost:8765/edge/?layout=per-wire:2,total-current/total-power&theme=nord&wire_limit=9
+```
+
+On an Edge mounted upright the slots run top to bottom. The single-widget pages
+(`/per-wire/` …) work in any browser window as well.
+
+**The kiosk.** `~/.local/share/wireview-xeneon-edge/wireview-edge-kiosk [URL]` waits for the
+bridge, finds the Edge by its resolution (`xrandr`, 2560×720 or 720×2560) and starts the first
+Chromium-family browser it finds (Chromium, Chrome, Brave, Vivaldi, Edge) in `--kiosk` mode at
+that monitor's position, with its own profile so your normal browser session is untouched.
+Chromium is run through X11/XWayland for this, because a Wayland program cannot choose its
+monitor. Set `WIREVIEW_EDGE_POSITION=X,Y` (the monitor's top-left corner) if the Edge is not
+found or runs scaled, and `WIREVIEW_EDGE_BROWSER` to choose the browser. Firefox is the
+fallback and opens `--kiosk` on whichever monitor the desktop picks; move it once with a window
+rule (KDE: *Window Rules*; GNOME: drag it, then F11). Close the kiosk with Alt+F4.
+
+**Managing it.** `systemctl --user status|stop|restart wireview-bridge`; messages are in
+`journalctl --user -u wireview-bridge`. Installer options: `--ref <tag> --sha256 <hash>` (one
+reviewed build, both in the release notes), `--no-start`, `--log` / `--log-dir <folder>`
+([CSV log](#csv-log)), `--extra-args '--port 9000'`, `--dir <folder>`. With a
+`wireview-bridge` binary next to `install.sh` (a source build:
+`cargo build --release -p wireview-bridge`, then copy `install.sh` into `target/release/`) that
+binary is installed and nothing is downloaded.
+
+There is no Thermal Grizzly app or HWiNFO on Linux to fight over the port, but only one program
+can read the WireView: stop other WireView daemons (wireview-hwmon, wireview-pro-ii) first, or
+they will show up as "Serial port busy". `--source hwinfo` is Windows-only.
+
+Tested on CachyOS (KDE Plasma, Wayland) with a WireView Pro II on firmware v5.
+
 ## How it works
 
 ```
@@ -131,7 +228,7 @@ HTTP server.
 - `wireview-core/src/source.rs` picks the reader. `--source auto` (default) opens the COM port
   directly and falls back to HWiNFO64 shared memory (`hwinfo.rs`, HWiNFO 8.41+ with Shared
   Memory Support) only while the port is unavailable. `--source serial` / `hwinfo` force one;
-  `--serial-port COM5` overrides auto-detection by USB ID 0483:5740. While the port is missing
+  `--serial-port COM5` (Linux: `/dev/ttyACM0`) overrides auto-detection by USB ID 0483:5740. While the port is missing
   or busy the reader retries every two seconds and answers widget polls in between from its
   last result, so an unplugged WireView does not cost a USB port enumeration per poll.
 - While the bridge holds the port, HWiNFO's own WireView sensor stops updating; it resumes
@@ -292,7 +389,9 @@ itself is not affected.
 
 `node --test tests/widget.test.cjs` checks widget polling, stale detection and custom ports.
 After `cargo test`, `pwsh -NoProfile -File tests/installer.test.ps1` checks installation and
-uninstallation in temporary directories with Windows administration and downloads mocked.
+uninstallation in temporary directories with Windows administration and downloads mocked;
+`sh tests/installer.test.sh` does the same for the Linux installer with `curl`, `systemctl`,
+`sudo` and `udevadm` stubbed.
 
 Audit findings and the remaining hardware checks are recorded in [AUDIT-2026-09-30.md](AUDIT-2026-09-30.md).
 

@@ -154,6 +154,13 @@ body.problem-on .problem { display: flex; }
 .gauge.warn .fill { stroke: var(--warn); }
 .gauge.crit .fill { stroke: var(--crit); }
 
+/* Near-square landscape slots (840x696): the side-by-side layouts are about
+ * 150 units wide, so the unit must not outgrow the width. Wide slots keep
+ * 1vmin, as 0.66vw is the larger there. */
+@media (min-aspect-ratio: 1.2 / 1) {
+  :root { --u: min(1vmin, 0.66vw); }
+}
+
 /* Vertical slots: stack hero above gauge */
 @media (max-aspect-ratio: 1.2 / 1) {
   .hero-wrap { flex-direction: column-reverse; justify-content: center; }

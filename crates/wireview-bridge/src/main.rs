@@ -56,8 +56,8 @@ struct Args {
     #[arg(long, default_value = "auto", value_parser = source, value_name = "auto|serial|hwinfo")]
     source: Source,
 
-    /// WireView COM port (default: auto-detect)
-    #[arg(long, value_name = "COMx")]
+    /// WireView serial port, e.g. COM5 or /dev/ttyACM0 (default: auto-detect)
+    #[arg(long, value_name = "PORT")]
     serial_port: Option<String>,
 
     /// Also write the readings to a new log-<date>-<time>.csv in this directory,
@@ -69,7 +69,7 @@ struct Args {
     #[arg(long, value_name = "SECONDS", default_value = "60", value_parser = csvlog::parse_interval, requires = "csv_log")]
     csv_interval: Duration,
 
-    /// Exit (status 3, for the scheduled task to restart) when a device read
+    /// Exit (status 3, for the scheduled task or systemd to restart) when a device read
     /// has not returned after this many seconds; 0 turns the watchdog off
     #[arg(long, value_name = "SECONDS", default_value = "20", value_parser = watchdog::parse_limit)]
     watchdog: Duration,

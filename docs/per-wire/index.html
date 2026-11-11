@@ -22,6 +22,9 @@
   .foot { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 0 1em; font-size: var(--fs-sub); color: var(--ink-2); white-space: nowrap; }
   .foot b { color: var(--ink); font-weight: 600; }
   .foot .status { margin-left: auto; }
+  .wires { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  /* Six readings side by side need about 200 units of width (840x696 slot). */
+  @media (min-aspect-ratio: 1.2 / 1) { :root { --u: min(1vmin, 0.5vw); } }
   /* Vertical slots: two rows of three */
   @media (max-aspect-ratio: 1.2 / 1) {
     .wires { grid-template-columns: repeat(3, 1fr); grid-template-rows: 1fr 1fr; }

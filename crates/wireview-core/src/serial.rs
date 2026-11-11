@@ -53,12 +53,15 @@ pub enum SerialError {
     Transport(String),
     /// The port works but the reply was short or implausible.
     Protocol(String),
+    /// The port exists but this user may not open it (Linux: no udev rule
+    /// and not in the port's group).
+    Denied(String),
 }
 
 impl fmt::Display for SerialError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SerialError::Transport(s) | SerialError::Protocol(s) => f.write_str(s),
+            SerialError::Transport(s) | SerialError::Protocol(s) | SerialError::Denied(s) => f.write_str(s),
         }
     }
 }
@@ -67,6 +70,21 @@ impl std::error::Error for SerialError {}
 
 fn protocol(msg: impl Into<String>) -> SerialError {
     SerialError::Protocol(msg.into())
+}
+
+/// Why `name` did not open. Windows reports a port another program holds as
+/// "access denied", so only elsewhere does that mean missing permissions.
+fn open_error(name: &str, e: &serialport::Error) -> SerialError {
+    let denied = matches!(e.kind, serialport::ErrorKind::Io(io::ErrorKind::PermissionDenied));
+    if denied && !cfg!(windows) {
+        SerialError::Denied(format!(
+            "cannot open {name}: {e} (install the udev rule from install.sh, or add your user to the port's group)"
+        ))
+    } else if cfg!(windows) {
+        protocol(format!("cannot open {name}: {e} (is the WireView app or HWiNFO using it?)"))
+    } else {
+        protocol(format!("cannot open {name}: {e} (is another program using it?)"))
+    }
 }
 
 /// Serial ports whose USB IDs match the WireView Pro II.
@@ -221,7 +239,7 @@ impl WireViewSerial {
             .timeout(TIMEOUT)
             .dtr_on_open(true)
             .open()
-            .map_err(|e| protocol(format!("cannot open {name}: {e} (is the WireView app or HWiNFO using it?)")))?;
+            .map_err(|e| open_error(&name, &e))?;
         let (fw_version, uid, build) = Self::handshake(ser.as_mut()).map_err(|e| match e {
             SerialError::Transport(s) => SerialError::Transport(format!("{name}: {s}")),
             e => e,
@@ -343,5 +361,22 @@ mod tests {
             f[at] = value;
             assert!(matches!(parse_sensors(&f), Err(SerialError::Protocol(_))), "byte {at} = {value}");
         }
+    }
+
+    #[test]
+    fn a_port_the_user_may_not_open_is_reported_as_denied() {
+        let denied = serialport::Error::new(serialport::ErrorKind::Io(io::ErrorKind::PermissionDenied), "Permission denied");
+        let busy = serialport::Error::new(serialport::ErrorKind::NoDevice, "Device or resource busy");
+        // Windows says "access denied" for a port another program holds.
+        assert_eq!(
+            matches!(open_error("/dev/ttyACM0", &denied), SerialError::Denied(_)),
+            !cfg!(windows)
+        );
+        assert!(matches!(open_error("/dev/ttyACM0", &busy), SerialError::Protocol(_)));
+        assert!(
+            open_error("/dev/ttyACM0", &denied)
+                .to_string()
+                .starts_with("cannot open /dev/ttyACM0: ")
+        );
     }
 }

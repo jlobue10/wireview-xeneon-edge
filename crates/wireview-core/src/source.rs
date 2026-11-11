@@ -237,8 +237,12 @@ impl Reader {
                 }
                 Err(e) => {
                     out.error = Some(e.to_string());
-                    if out.device_found {
+                    if matches!(e, SerialError::Denied(_)) {
+                        out.set_problem("No access to serial port", "install the udev rule (see README)");
+                    } else if out.device_found && cfg!(windows) {
                         out.set_problem("COM port busy", "close the WireView app (and HWiNFO)");
+                    } else if out.device_found {
+                        out.set_problem("Serial port busy", "close the other program reading the WireView");
                     } else {
                         out.set_problem("WireView not found", "plug the WireView Pro II into USB");
                     }

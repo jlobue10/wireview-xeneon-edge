@@ -174,6 +174,7 @@ fn c5_c6_static_pages_stay_inside_the_root() {
         "/total-power/",
         "/common/wireview.js",
         "/per-wire/?wire_limit=9",
+        "/edge/?layout=per-wire:2,total-current/total-power",
     ] {
         let r = get(b.port(), p);
         assert_eq!(r.status, 200, "{p}");
