@@ -145,6 +145,7 @@ mod tests {
             "/per-wire/index.html",
             "/total-current/",
             "/total-power/",
+            "/edge/",
         ] {
             assert!(is_html(s.get(p)), "{p}");
         }

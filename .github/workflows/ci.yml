@@ -27,5 +27,8 @@ jobs:
       - name: Installer regressions
         shell: pwsh
         run: ./tests/installer.test.ps1
+      - name: Linux installer regressions
+        if: runner.os == 'Linux'
+        run: sh tests/installer.test.sh
       - name: Widget regressions
         run: node --test tests/widget.test.cjs
